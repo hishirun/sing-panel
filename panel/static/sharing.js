@@ -31,3 +31,39 @@ document.addEventListener('change', event => {
   if (!event.target.matches('[data-select-all]')) return;
   event.target.closest('form').querySelectorAll('input[name="ids"]').forEach(box => { box.checked = event.target.checked; });
 });
+(() => {
+  const columns = document.querySelectorAll('[data-traffic-tip]');
+  if (!columns.length) return;
+  const tip = document.createElement('div');
+  tip.className = 'traffic-tooltip';
+  tip.id = 'traffic-tooltip';
+  tip.setAttribute('role','tooltip');
+  tip.hidden = true;
+  document.body.appendChild(tip);
+  let active;
+  const hide = () => { tip.hidden = true; if (active) active.removeAttribute('aria-describedby'); active = null; };
+  const show = column => {
+    if (active && active !== column) active.removeAttribute('aria-describedby');
+    active = column;
+    tip.replaceChildren(column.querySelector('template').content.cloneNode(true));
+    tip.hidden = false;
+    column.setAttribute('aria-describedby',tip.id);
+    const box = column.getBoundingClientRect();
+    const width = tip.offsetWidth, height = tip.offsetHeight;
+    const left = Math.max(12,Math.min(window.innerWidth-width-12,box.left+box.width/2-width/2));
+    const top = box.top-height-12 >= 12 ? box.top-height-12 : Math.min(window.innerHeight-height-12,box.bottom+12);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${Math.max(12,top)}px`;
+  };
+  columns.forEach(column => {
+    column.addEventListener('pointerenter',() => show(column));
+    column.addEventListener('pointerleave',() => { if (document.activeElement !== column) hide(); });
+    column.addEventListener('focus',() => show(column));
+    column.addEventListener('blur',hide);
+    column.addEventListener('click',() => show(column));
+  });
+  document.addEventListener('click',event => { if (!event.target.closest('[data-traffic-tip]')) hide(); });
+  document.addEventListener('keydown',event => { if (event.key === 'Escape') hide(); });
+  window.addEventListener('scroll',hide,true);
+  window.addEventListener('resize',hide);
+})();
