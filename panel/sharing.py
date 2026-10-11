@@ -16,7 +16,7 @@ from .options import domain
 DEFAULT_TARGETS='Cloudflare,www.cloudflare.com,443\nMicrosoft,www.microsoft.com,443\nApple,www.apple.com,443'
 
 def read_settings(path):
-    result={'brand':'sing-panel','theme':'glass','public_url':'','support':'','monitor_targets':DEFAULT_TARGETS,'admin_path':'','share_path':'/s'}
+    result={'brand':'SingBox面板','theme':'glass','public_url':'','support':'','monitor_targets':DEFAULT_TARGETS,'admin_path':'','share_path':'/s'}
     with connect(path) as db:
         result.update({r['key']:r['value'] for r in db.execute('SELECT * FROM settings') if r['key'] in result})
     return result

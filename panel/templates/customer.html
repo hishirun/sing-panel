@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% block content %}
-<header><div class="brand"><img class="brand-logo" src="/static/logo.png" alt=""> {{ branding.brand }}</div><span class="pill">专属订阅分享页</span></header>
+<header><span class="pill">专属订阅分享页</span></header>
 <div class="sub">MY SUBSCRIPTION</div><div class="rowhead"><h1>{{ user.name }}</h1><span class="{{ 'bad' if status else 'good' }}">● {{ status or '订阅有效' }}</span></div>
 <p class="muted">所有授权节点共享流量额度及到期时间。请妥善保管此页面链接。</p>
 {% if changed %}<div class="alert">Snell 密码已更新，请更新所有 Snell 客户端配置。Reality UUID 保持不变。</div>{% endif %}
