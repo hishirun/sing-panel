@@ -134,7 +134,7 @@ def presence(path,connections,close,now=None):
     with connect(path) as db:
         users={r['id']:dict(r) for r in db.execute('SELECT * FROM users')}
         for item in sorted(connections,key=lambda c:c.get('start','')):
-            meta=item.get('metadata',{});tag=meta.get('inboundTag','');uid=meta.get('inboundUser','')
+            meta=item.get('metadata',{});tag=meta.get('inboundTag','');uid=meta.get('inboundUser','').rsplit(':',1)[-1]
             if not uid and ':' in tag:uid=tag.rsplit(':',1)[-1]
             if uid not in users:continue
             try:ip=str(ipaddress.ip_address(meta.get('sourceIP','')))

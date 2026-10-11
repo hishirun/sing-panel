@@ -50,7 +50,7 @@ def test_grants_and_no_empty_authentication(db):
     assert config([n],[u],[])['inbounds']==[]
     m=[dict(node_id='node',user_id='alice')]
     doc=config([n],[u],m)
-    assert doc['inbounds'][0]['users']==[{'name':'alice','userkey':'secret'}]
+    assert doc['inbounds'][0]['users']==[{'name':'node:alice','userkey':'secret'}]
     assert outbounds(u,[n],m,'example.com')[0]['userkey']=='secret'
     u['enabled']=0
     assert config([n],[u],m)['inbounds']==[]
@@ -77,3 +77,20 @@ def test_compat_ports_preserved_and_native_exports(db):
     assert outs[0]['psk']=='secret'
     assert 'userkey' not in outs[0]
     assert 'psk=secret, version=6' in native_subscription(outs,'surge.conf')
+
+def test_node_accounting_shared_and_compat_no_double_count(db):
+    with connect(db) as c:
+        c.execute("INSERT INTO nodes(id,name,protocol,port,secret) VALUES('n1','Node One','snell6',32001,'secret')")
+        c.execute("INSERT INTO nodes(id,name,protocol,port,secret) VALUES('n2','Node Two','snell6',32002,'secret')")
+    counters={'user>>>n1:alice>>>traffic>>>uplink':100,'user>>>n1:alice>>>traffic>>>downlink':200,'inbound>>>n2:alice>>>traffic>>>downlink':300}
+    account(db,'epoch',counters,day='2026-10-11')
+    account(db,'epoch',counters,day='2026-10-11')
+    assert records(db,'users')[0]['upload']==100
+    assert records(db,'users')[0]['download']==500
+    with connect(db) as c:
+        assert c.execute('SELECT SUM(upload+download) FROM node_daily').fetchone()[0]==600
+        assert c.execute('SELECT SUM(upload+download) FROM daily').fetchone()[0]==600
+        c.execute('UPDATE users SET upload=0,download=0')
+    account(db,'epoch',dict(counters,**{'user>>>n1:alice>>>traffic>>>uplink':150}),day='2026-10-12')
+    assert records(db,'users')[0]['upload']==50
+    with connect(db) as c:assert c.execute('SELECT SUM(upload+download) FROM node_daily').fetchone()[0]==650

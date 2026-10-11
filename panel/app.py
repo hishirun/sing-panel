@@ -41,6 +41,7 @@ runtime = Runtime(BINARY, DIRECTORY, STATS_PORT)
 ph = PasswordHasher()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
 templates.env.filters['bytes'] = lambda n: f'{n / 1024**3:.2f} GiB'
+templates.env.filters['traffic_bytes'] = lambda n: f'{n / 1024**3:.2f} GiB' if n>=1024**3 else f'{n / 1024**2:.2f} MiB' if n>=1024**2 else f'{n / 1024:.2f} KiB' if n>=1024 else f'{n} B'
 templates.env.filters['datetime'] = lambda n: datetime.fromtimestamp(n,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if n else '暂无'
 attempts = {}
 

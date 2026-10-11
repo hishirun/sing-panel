@@ -5,7 +5,7 @@ import json
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit
 import qrcode
 import qrcode.image.svg
@@ -80,6 +80,21 @@ def share_context(path,user,host,base):
     pending_days=json.loads(user.get('policy','{}')).get('first_use_days',0) if not user.get('activated_at') else 0
     with connect(path) as db:
         daily=[dict(r) for r in db.execute('SELECT day,upload,download,upload+download total FROM daily WHERE user_id=? ORDER BY day DESC LIMIT 30',(user['id'],))]
+        today=datetime.now(timezone.utc).date()
+        saved={r['day']:r for r in db.execute('SELECT day,upload,download FROM daily WHERE user_id=? AND day>=?',(user['id'],str(today-timedelta(days=29))))}
+        daily=[]
+        for offset in range(29,-1,-1):
+            date=str(today-timedelta(days=offset));r=saved.get(date,{'upload':0,'download':0})
+            daily.append(dict(day=date,label=date[5:],upload=r['upload'],download=r['download'],total=r['upload']+r['download']))
+        node_usage=[dict(r) for r in db.execute('SELECT node_id,node_name,SUM(upload) upload,SUM(download) download,SUM(upload+download) total FROM node_daily WHERE user_id=? GROUP BY node_id ORDER BY total DESC',(user['id'],))]
+        seen={r['node_id'] for r in node_usage}
+        node_usage.extend(dict(node_id=n['id'],node_name=n['name'],upload=0,download=0,total=0) for n in nodes if n['id'] not in seen)
+        historical=db.execute('SELECT COALESCE(SUM(upload+download),0) FROM daily WHERE user_id=?',(user['id'],)).fetchone()[0]
+        unattributed=max(0,historical-sum(r['total'] for r in node_usage))
+        maximum=max([r['total'] for r in daily],default=0) or 1
+        for r in daily:r.update(up_height=r['upload']/maximum*100,down_height=r['download']/maximum*100)
+        node_max=max([r['total'] for r in node_usage],default=0) or 1
+        for r in node_usage:r['percent']=r['total']/node_max*100
         monitoring=[]
         for target in parse_targets(read_settings(path)['monitor_targets']):
             rows=[dict(r) for r in db.execute('SELECT timestamp,ms FROM monitor_samples WHERE target=? ORDER BY timestamp DESC LIMIT 30',(target['key'],))][::-1]
@@ -97,7 +112,7 @@ def share_context(path,user,host,base):
                 expires=datetime.fromtimestamp(user['expires'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if user['expires'] else (f'首次使用后 {pending_days} 天' if pending_days else '长期有效'),
                 days=max(0,int((user['expires']-time.time()+86399)//86400)) if user['expires'] else None,
                 share_url=base+read_settings(path)['share_path']+'/'+user['token'],daily=daily,daily_max=max([d['total'] for d in daily],default=1) or 1,
-                monitoring=monitoring,active_count=len(active))
+                monitoring=monitoring,active_count=len(active),node_usage=node_usage,unattributed=unattributed,today_usage=daily[-1],month_usage=sum(d['total'] for d in daily))
 
 def qr_image(text):
     image=qrcode.make(text,image_factory=qrcode.image.svg.SvgPathImage,border=3)

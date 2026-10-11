@@ -111,7 +111,7 @@ class Runtime:
     def disconnect(self,identity):
         for item in self.control().get('connections',[]):
             metadata=item.get('metadata',{})
-            if metadata.get('inboundUser')==identity or metadata.get('inboundTag','').endswith(':'+identity):
+            if metadata.get('inboundUser','').rsplit(':',1)[-1]==identity or metadata.get('inboundTag','').endswith(':'+identity):
                 self.control('/connections/'+item['id'],'DELETE')
 
     def tick(self):

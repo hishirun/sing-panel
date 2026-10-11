@@ -40,6 +40,10 @@ def init_db(path):
           PRIMARY KEY(epoch,counter));
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS monitor_samples (target TEXT NOT NULL, timestamp INTEGER NOT NULL, ms REAL, PRIMARY KEY(target,timestamp));
+        CREATE TABLE IF NOT EXISTS node_daily (
+          day TEXT NOT NULL,user_id TEXT NOT NULL,node_id TEXT NOT NULL,node_name TEXT NOT NULL,
+          upload INTEGER NOT NULL DEFAULT 0,download INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(day,user_id,node_id));
         CREATE TABLE IF NOT EXISTS daily (
           day TEXT NOT NULL, user_id TEXT NOT NULL, upload INTEGER NOT NULL DEFAULT 0,
           download INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day,user_id));
@@ -91,15 +95,15 @@ def config(nodes, users, memberships, stats_port=19090):
         i = {'tag': n['id'], 'listen_port': n['port'], **listen_options(n)}
         if n['protocol'] in ('snell5', 'snell6'):
             i.update(type='snell', version=int(n['protocol'][-1]), psk=n['secret'],
-                     users=[{'name': u['id'], 'userkey': u['secret']} for u in allowed], **snell_options(n))
+                     users=[{'name': n['id']+':'+u['id'], 'userkey': u['secret']} for u in allowed], **snell_options(n))
         else:
-            i.update(type='vless', users=[{'name':u['id'],'uuid':u['uuid'],'flow':options(n)['flow']} for u in allowed],
+            i.update(type='vless', users=[{'name':n['id']+':'+u['id'],'uuid':u['uuid'],'flow':options(n)['flow']} for u in allowed],
                      tls=reality_tls(n))
         inbounds.append(i)
     return {'log': {'level': 'warn', 'timestamp': True}, 'inbounds': inbounds,
             'outbounds': [{'type': 'direct', 'tag': 'direct'}],
             'experimental': {'v2ray_api': {'listen': f'127.0.0.1:{stats_port}',
-                'stats': {'enabled': True, 'users': [u['id'] for u in users], 'inbounds':compat_tags}}}}
+                'stats': {'enabled': True, 'users': [entry['name'] for inbound in inbounds for entry in inbound.get('users',[])], 'inbounds':compat_tags}}}}
 
 def current_config(path, stats_port=19090):
     with connect(path) as db:
@@ -122,6 +126,7 @@ def account(path, epoch, counters, day=None):
             if parts[0]=='inbound' and ':' not in parts[1]:
                 continue
             user = parts[1].split(':')[-1]
+            node_id=parts[1].rsplit(':',1)[0] if ':' in parts[1] else None
             if not db.execute('SELECT 1 FROM users WHERE id=?',(user,)).fetchone():
                 continue
             previous = db.execute('SELECT value FROM samples WHERE epoch=? AND counter=?',(epoch,counter)).fetchone()
@@ -140,6 +145,11 @@ def account(path, epoch, counters, day=None):
             db.execute(f'UPDATE users SET {col}={col}+? WHERE id=?',(delta,user))
             db.execute(f'''INSERT INTO daily(day,user_id,{col}) VALUES(?,?,?)
                 ON CONFLICT(day,user_id) DO UPDATE SET {col}={col}+excluded.{col}''',(day,user,delta))
+            if node_id and delta:
+                node=db.execute('SELECT name FROM nodes WHERE id=?',(node_id,)).fetchone()
+                if node:
+                    db.execute(f'''INSERT INTO node_daily(day,user_id,node_id,node_name,{col}) VALUES(?,?,?,?,?)
+                        ON CONFLICT(day,user_id,node_id) DO UPDATE SET {col}={col}+excluded.{col},node_name=excluded.node_name''',(day,user,node_id,node['name'],delta))
             db.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?)',(epoch,counter,value))
 
 

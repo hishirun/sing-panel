@@ -93,12 +93,17 @@ def test_all_protocols_and_shared_user_accounting(system):
         assert users[0]['upload']>=32768*3
         assert users[0]['download']>=131072*3
         assert users[1]['upload']==users[1]['download']==0
+        with connect(rt.db) as c:
+            totals=c.execute('SELECT SUM(upload),SUM(download),COUNT(DISTINCT node_id) FROM node_daily WHERE user_id=?',('alice',)).fetchone()
+            assert totals[0]==users[0]['upload']
+            assert totals[1]==users[0]['download']
+            assert totals[2]==3
         rt.sample()
         assert records(rt.db,'users')[0]['upload']==users[0]['upload']
         with connect(rt.db) as c:c.execute('UPDATE users SET quota=1 WHERE id=?',('alice',))
         rt.apply()
         cfg=json.loads((tmp/'sing-box.json').read_text())
-        assert all(('alice' not in i['tag']) and all(u['name']=='bob' for u in i.get('users',[])) for i in cfg['inbounds'])
+        assert all(('alice' not in i['tag']) and all(u['name'].rsplit(':',1)[-1]=='bob' for u in i.get('users',[])) for i in cfg['inbounds'])
         assert records(rt.db,'users')[0]['download']>=users[0]['download']
     finally:server.shutdown()
 
