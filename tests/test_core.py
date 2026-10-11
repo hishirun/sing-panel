@@ -89,6 +89,7 @@ def test_node_accounting_shared_and_compat_no_double_count(db):
     assert records(db,'users')[0]['download']==500
     with connect(db) as c:
         assert c.execute('SELECT SUM(upload+download) FROM node_daily').fetchone()[0]==600
+        assert c.execute('SELECT SUM(upload+download) FROM node_hourly').fetchone()[0]==600
         assert c.execute('SELECT SUM(upload+download) FROM daily').fetchone()[0]==600
         c.execute('UPDATE users SET upload=0,download=0')
     account(db,'epoch',dict(counters,**{'user>>>n1:alice>>>traffic>>>uplink':150}),day='2026-10-12')

@@ -40,6 +40,10 @@ def init_db(path):
           PRIMARY KEY(epoch,counter));
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS monitor_samples (target TEXT NOT NULL, timestamp INTEGER NOT NULL, ms REAL, PRIMARY KEY(target,timestamp));
+        CREATE TABLE IF NOT EXISTS node_hourly (
+          hour TEXT NOT NULL,user_id TEXT NOT NULL,node_id TEXT NOT NULL,
+          upload INTEGER NOT NULL DEFAULT 0,download INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(hour,user_id,node_id));
         CREATE TABLE IF NOT EXISTS node_daily (
           day TEXT NOT NULL,user_id TEXT NOT NULL,node_id TEXT NOT NULL,node_name TEXT NOT NULL,
           upload INTEGER NOT NULL DEFAULT 0,download INTEGER NOT NULL DEFAULT 0,
@@ -114,6 +118,7 @@ def current_config(path, stats_port=19090):
 
 def account(path, epoch, counters, day=None):
     """Atomic and idempotent; never reset the remote counter."""
+    hour=time.strftime('%Y-%m-%dT%H:00',time.gmtime())
     day = day or time.strftime('%Y-%m-%d', time.gmtime())
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
@@ -145,6 +150,9 @@ def account(path, epoch, counters, day=None):
             db.execute(f'UPDATE users SET {col}={col}+? WHERE id=?',(delta,user))
             db.execute(f'''INSERT INTO daily(day,user_id,{col}) VALUES(?,?,?)
                 ON CONFLICT(day,user_id) DO UPDATE SET {col}={col}+excluded.{col}''',(day,user,delta))
+            if delta:
+                db.execute(f'''INSERT INTO node_hourly(hour,user_id,node_id,{col}) VALUES(?,?,?,?)
+                    ON CONFLICT(hour,user_id,node_id) DO UPDATE SET {col}={col}+excluded.{col}''',(hour,user,node_id or '',delta))
             if node_id and delta:
                 node=db.execute('SELECT name FROM nodes WHERE id=?',(node_id,)).fetchone()
                 if node:

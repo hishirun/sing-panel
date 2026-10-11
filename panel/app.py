@@ -355,9 +355,11 @@ async def settings_save(request: Request):
     return RedirectResponse('/settings',status_code=303)
 
 @app.get('/s/{token}', response_class=HTMLResponse)
-def customer(request: Request, token: str, changed: bool=False):
+def customer(request: Request, token: str, changed: bool=False, period: str="7d"):
     user=subscription_user(token)
     context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
+    from .traffic import traffic_view
+    context['traffic']=traffic_view(DB,user['id'],context['nodes'],period)
     return render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed)
 
 @app.get('/s/{token}/qr/{kind}')
