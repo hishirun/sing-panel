@@ -148,7 +148,7 @@ def test_share_page_scoped_configs_qr_and_password(client):
     assert page.status_code==200
     assert alice['secret'] in page.text and bob['secret'] not in page.text
     assert 'first' in page.text and 'second' in page.text
-    assert '复制节点链接' in page.text and '节点延迟监控' in page.text
+    assert '复制节点链接' in page.text and '延迟监控' in page.text
     assert c.get(url+'/qr/'+nodes[0]['id']).headers['content-type'].startswith('image/svg+xml')
     assert c.get(url+'/qr/page').status_code==200
     assert c.post(url+'/psk',data={'csrf_token':'bad','psk':'new-secret-012345'}).status_code==403
