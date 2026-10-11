@@ -48,7 +48,7 @@ def save_settings(path,raw):
         try:parsed.port
         except ValueError:raise ValueError('公开地址端口无效')
     theme=str(raw.get('theme','glass'))
-    if theme not in ('glass','dark'):raise ValueError('主题无效')
+    if theme not in ('glass','dark','retro'):raise ValueError('主题无效')
     targets=str(raw.get('monitor_targets','')).strip()
     parse_targets(targets)
     from .paths import validate_paths
