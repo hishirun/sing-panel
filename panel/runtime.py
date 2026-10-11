@@ -4,6 +4,9 @@ import subprocess
 import threading
 import time
 import uuid
+import secrets
+from urllib.request import Request, urlopen
+from .management import maintain, presence
 from pathlib import Path
 from .core import account, current_config
 from .stats import query
@@ -20,6 +23,9 @@ class Runtime:
         self.signature = None
         self.rejected = None
         self.error = ''
+        self.control_secret=secrets.token_urlsafe(32)
+        self.online={}
+        self.connections=[]
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread = None
@@ -57,6 +63,7 @@ class Runtime:
     def apply(self):
         with self.lock:
             document = current_config(self.db, self.port)
+            document['experimental']['clash_api']={'external_controller':f'127.0.0.1:{self.port+1}','secret':self.control_secret}
             signature = json.dumps(document, sort_keys=True)
             if self.process and self.process.poll() is None and signature == self.signature:
                 return
@@ -90,10 +97,29 @@ class Runtime:
             self.signature = signature
             self.rejected = None
 
+    def control(self,path='/connections',method='GET'):
+        request=Request(f'http://127.0.0.1:{self.port+1}'+path,method=method,
+                        headers={'Authorization':'Bearer '+self.control_secret})
+        with urlopen(request,timeout=3) as response:
+            payload=response.read()
+        return json.loads(payload) if payload else {}
+
+    def track(self):
+        self.connections=self.control().get('connections',[])
+        self.online=presence(self.db,self.connections,lambda identity:self.control('/connections/'+identity,'DELETE'))
+
+    def disconnect(self,identity):
+        for item in self.control().get('connections',[]):
+            metadata=item.get('metadata',{})
+            if metadata.get('inboundUser')==identity or metadata.get('inboundTag','').endswith(':'+identity):
+                self.control('/connections/'+item['id'],'DELETE')
+
     def tick(self):
         with self.lock:
             self.sample()
+            maintain(self.db)
             self.apply()
+            self.track()
             self.error = ''
 
     def loop(self):

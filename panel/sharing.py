@@ -74,6 +74,7 @@ def share_context(path,user,host,base):
         nodes.append({**n,'port':allowed[n['id']]['port'] if n['mode']=='compat' else n['port'],
                       'outbound':out,'uri':uri,'surge':surge,'config':config})
     used=user['upload']+user['download']
+    pending_days=json.loads(user.get('policy','{}')).get('first_use_days',0) if not user.get('activated_at') else 0
     with connect(path) as db:
         daily=[dict(r) for r in db.execute('SELECT day,upload,download,upload+download total FROM daily WHERE user_id=? ORDER BY day DESC LIMIT 30',(user['id'],))]
         monitoring=[]
@@ -88,9 +89,9 @@ def share_context(path,user,host,base):
                                'average':round(sum(valid)/len(valid),1) if valid else None,
                                'online':round(100*len(valid)/len(rows)) if rows else None,
                                'stale':bool(rows and time.time()-rows[-1]['timestamp']>180)})
-    return dict(user=user,nodes=nodes,host=host,used=used,remaining=max(0,user['quota']-used),
+    return dict(user=user,nodes=nodes,host=host,pending_days=pending_days,used=used,remaining=max(0,user['quota']-used),
                 percent=min(100,round(used/user['quota']*100,1)) if user['quota'] else 0,
-                expires=datetime.fromtimestamp(user['expires'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if user['expires'] else '长期有效',
+                expires=datetime.fromtimestamp(user['expires'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if user['expires'] else (f'首次使用后 {pending_days} 天' if pending_days else '长期有效'),
                 days=max(0,int((user['expires']-time.time()+86399)//86400)) if user['expires'] else None,
                 share_url=base+'/s/'+user['token'],daily=daily,daily_max=max([d['total'] for d in daily],default=1) or 1,
                 monitoring=monitoring,active_count=len(active))

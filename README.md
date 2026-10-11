@@ -8,7 +8,7 @@
 - 计费：sing-box 用户级上/下行计数，SQLite 原子持久化，UTC 日用量。
 - 管理登录：Argon2 密码、会话、CSRF 校验、登录限频。
 
-这是首个可运行版本。当前为单台主机的多入站管理，不包含远程 agent 集群、支付订单、套餐系统或自动迁移旧库。Snell 节点可选独立端口 PSK 兼容模式或共享端口 userkey 模式；Reality 使用共享端口。独立端口按授权用户分配，界面中的端口是分配起点。订阅模板后续迭代；当前附带基本 sing-box JSON、Surge Snell 列表与 Shadowrocket URI 输出，未宣称全部客户端版本兼容。
+当前为单台主机的多入站管理，不包含远程 agent 集群、支付订单、套餐系统或自动迁移旧库。Snell 节点可选独立端口 PSK 兼容模式或共享端口 userkey 模式；Reality 使用共享端口。独立端口按授权用户分配，界面中的端口供首位用户使用，其余用户随机分配独立端口。订阅模板后续迭代；当前附带基本 sing-box JSON、Surge Snell 列表与 Shadowrocket URI 输出，未宣称全部客户端版本兼容。
 
 ## 运行（Linux Docker）
 
@@ -36,13 +36,13 @@ ssh -N -L 18889:127.0.0.1:18889 -p 2323 root@YOUR_SERVER
 
 ## 本地开发
 
-需要 Python 3.13+ 和带 `with_v2ray_api` 的 sing-box。官方普通预编译包不包含该统计功能。Go 版本须满足上游 go.mod（当前至少 1.25.5）。
+需要 Python 3.13+ 和按下方脚本构建的 sing-box（包含统计与连接身份扩展）。官方普通预编译包不包含该统计功能。Go 版本须满足上游 go.mod（当前至少 1.25.5）。
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt pytest httpx
-go install -tags with_quic,with_utls,with_v2ray_api github.com/sagernet/sing-box/cmd/sing-box@v1.14.3
-export SING_BOX="$(go env GOPATH)/bin/sing-box"
+./deploy/build-core.sh "$PWD/.venv/bin/sing-box"
+export SING_BOX="$PWD/.venv/bin/sing-box"
 export PANEL_PUBLIC_HOST=127.0.0.1
 .venv/bin/python -m panel.setup
 .venv/bin/uvicorn panel.app:app --host 127.0.0.1 --port 18889 --no-access-log
@@ -111,3 +111,14 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 监控线程每分钟测试配置目标的 TCP 建连，独立于核心统计线程，保留最近一天采样，分享页展示最近 30 次。此延迟是服务器到目标的测量，不是客户端到节点的测量；失败与超过三分钟未更新会标记。分享页只显示目标名称，不显示目标地址。默认目标 Cloudflare/Microsoft/Apple，可改动或留空关闭。
 
 字节级实测与复现脚本见 [流量计量报告](docs/traffic-audit-2026-10-11.md)。
+
+
+## 管理页面与用户生命周期
+
+- `/`：运行概览；`/users`：用户列表、筛选、批量操作；`/nodes`：节点列表、复制与批量启停；`/settings`：品牌、公开链接与监控设置；`/system/status`：核心状态、重启、数据库备份、密码及操作记录。
+- 用户支持名称、分组、备注、UUID/PSK 编辑、多节点授权、批量创建、启停、删除、续费加天数/流量、重置用量、重发订阅、轮换连接凭据、主动断开连接、清理无授权或已耗尽用户。
+- 首次使用有效期从第一次非零业务流量开始。固定日期与日历边界均为 UTC；自动续期支持固定天数、每周、每月及次数上限，成功续期会清零本期流量，手动停用保持停用。独立流量周期仅重置用量，不延长有效期；已有采样基线保留，防止重新计费。
+- 在线状态、最近 IP、最后在线和断开连接来自本地受密钥保护的 Clash API。`core-patches/connection-user.patch` 仅在连接元数据中补充用户和入站身份，便于共享端口映射。需用 `with_clash_api` 与补丁构建；Docker/CI 已同步。控制接口只监听统计端口 +1（默认 19091），不可对公网开放。
+- 同时在线 IP 上限由约 2 秒轮询执行：保留较早建立连接的 IP，关闭新增超额 IP 的当前连接。不是握手前硬限制；不等于设备数；NAT 下多设备会共用 IP。清空历史后，仍在线的 IP 会再次出现。
+- 外部节点 URI 直接附加到 Shadowrocket URI 订阅；远程 http(s) 订阅需管理员点击刷新，限 5 个地址、单个最多 256 KiB，成功后缓存。暂不转换到 sing-box JSON 或 Surge。停用用户不返回外部节点。
+- 数据库下载备份包含全部节点/用户凭据，不含管理员认证文件。人工恢复应停止服务并保留原库；当前不提供浏览器覆盖导入。修改管理员密码会使其他已有管理会话失效。

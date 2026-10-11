@@ -27,3 +27,7 @@ document.addEventListener('submit', event => {
   const message = event.target.dataset.confirm;
   if (message && !window.confirm(message)) event.preventDefault();
 });
+document.addEventListener('change', event => {
+  if (!event.target.matches('[data-select-all]')) return;
+  event.target.closest('form').querySelectorAll('input[name="ids"]').forEach(box => { box.checked = event.target.checked; });
+});

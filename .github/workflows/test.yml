@@ -13,6 +13,12 @@ jobs:
           go-version: '1.27.2'
       - run: pip install -r requirements.txt pytest httpx
       - name: Build statistics-enabled sing-box
-        run: go install -tags with_quic,with_utls,with_v2ray_api github.com/sagernet/sing-box/cmd/sing-box@v1.14.3
+        run: |
+          go mod download github.com/sagernet/sing-box@v1.14.3
+          cp -a "$(go env GOPATH)/pkg/mod/github.com/sagernet/sing-box@v1.14.3" /tmp/sing-box-build
+          chmod -R u+w /tmp/sing-box-build
+          cd /tmp/sing-box-build
+          git apply "$GITHUB_WORKSPACE/core-patches/connection-user.patch"
+          go build -tags with_quic,with_utls,with_v2ray_api,with_clash_api -o "$(go env GOPATH)/bin/sing-box" ./cmd/sing-box
       - name: Unit and real protocol integration tests
         run: SING_BOX="$(go env GOPATH)/bin/sing-box" python -m pytest -q

@@ -119,3 +119,34 @@ def test_failed_bind_rolls_back_running_core(system):
         with pytest.raises(RuntimeError):rt.apply()
         assert rt.process.pid==pid
         rt.sample()
+
+def test_live_connection_identity_and_disconnect(system):
+    rt,tmp=system
+    user=records(rt.db,'users')[0]
+    for outbound in outbounds(user,records(rt.db,'nodes'),records(rt.db,'memberships'),'127.0.0.1'):
+        socks_port=port()
+        path=tmp/'identity-client.json'
+        path.write_text(json.dumps({'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':socks_port}],'outbounds':[outbound]}))
+        with (tmp/'identity.log').open('a') as log:
+            client=subprocess.Popen([BINARY,'run','-c',str(path)],stdout=log,stderr=log)
+        target=socket.socket();target.bind(('127.0.0.1',0));target.listen()
+        try:
+            for _ in range(100):
+                try:
+                    with socket.create_connection(('127.0.0.1',socks_port),timeout=.1):break
+                except OSError:time.sleep(.02)
+            with socket.create_connection(('127.0.0.1',socks_port),timeout=5) as proxy:
+                proxy.sendall(b'\x05\x01\x00');assert proxy.recv(2)==b'\x05\x00'
+                proxy.sendall(b'\x05\x01\x00\x01\x7f\x00\x00\x01'+target.getsockname()[1].to_bytes(2,'big'))
+                assert proxy.recv(10)[1]==0
+                for _ in range(30):
+                    rt.track()
+                    if rt.online.get('alice',{}).get('connections'):break
+                    time.sleep(.02)
+                assert rt.online['alice']['connections']>=1
+                assert rt.online['alice']['ips']
+                rt.disconnect('alice')
+                proxy.settimeout(3)
+                assert proxy.recv(1)==b''
+        finally:
+            target.close();client.terminate();client.wait(timeout=5)

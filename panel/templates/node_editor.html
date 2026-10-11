@@ -9,7 +9,7 @@
 {% if notice %}<section class="good" role="status">{{ notice }}</section>{% endif %}
 <form method="post" action="{{ '/nodes/'+node.id+'/edit' if node else '/nodes' }}">
 <input type="hidden" name="token" value="{{ csrf }}"><input type="hidden" name="protocol" value="{{ values.protocol }}">
-<div class="grid"><div><section><h2>基本设置</h2><div class="formgrid">
+<div class="grid"><div><section><h2>基本设置</h2><div class="formgrid"><label>分组<input name="group_name" maxlength="60" value="{{ values.group_name or '' }}"></label><label>备注<input name="comment" maxlength="500" value="{{ values.comment or '' }}"></label></div><div class="formgrid">
 <label>节点名称<input name="name" value="{{ values.name }}" maxlength="80" required></label>
 <label>监听端口（留空自动随机）<input type="number" name="port" value="{{ values.port }}" min="1024" max="65535" placeholder="自动分配 20000–65000"></label>
 <label>监听 IP<input name="listen" value="{{ values.listen }}" required></label>

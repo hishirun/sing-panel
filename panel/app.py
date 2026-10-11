@@ -40,6 +40,7 @@ runtime = Runtime(BINARY, DIRECTORY, STATS_PORT)
 ph = PasswordHasher()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
 templates.env.filters['bytes'] = lambda n: f'{n / 1024**3:.2f} GiB'
+templates.env.filters['datetime'] = lambda n: datetime.fromtimestamp(n,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if n else '暂无'
 attempts = {}
 
 @asynccontextmanager
@@ -72,7 +73,8 @@ async def headers(request, call_next):
     return response
 
 def authenticated(request):
-    if not request.session.get('admin'):
+    if not request.session.get('admin') or request.session.get('auth_revision',0)!=auth.get('revision',0):
+        request.session.clear()
         raise HTTPException(401, '请先登录')
 
 def csrf(request, token):
@@ -107,7 +109,7 @@ def login(request: Request, password: str = Form(...), token: str = Form(...)):
         return render(request, 'login.html', error='密码不正确')
     attempts.pop(ip, None)
     request.session.clear()
-    request.session.update(admin=True, csrf=secrets.token_urlsafe(32))
+    request.session.update(admin=True, csrf=secrets.token_urlsafe(32),auth_revision=auth.get('revision',0))
     return RedirectResponse('/', status_code=303)
 
 @app.post('/logout')
@@ -120,6 +122,7 @@ def logout(request: Request, token: str = Form(...)):
 def dashboard(request: Request):
     if not request.session.get('admin'):
         return RedirectResponse('/login', status_code=303)
+    authenticated(request)
     users = records(DB, 'users')
     nodes = records(DB, 'nodes')
     memberships = records(DB, 'memberships')
@@ -204,8 +207,8 @@ async def save_node(request,identity=None):
             return editor(request,node,raw,notice=result)
         name=valid_name(str(raw.get('name','')))
         with connect(DB) as db:
-            port=int(raw['port']) if str(raw.get('port','')).strip() else (node['port'] if node else random_port(db,(STATS_PORT,18889)))
-        if not 1024<=port<=65535 or port in (STATS_PORT,18889):
+            port=int(raw['port']) if str(raw.get('port','')).strip() else (node['port'] if node else random_port(db,(STATS_PORT,STATS_PORT+1,18889)))
+        if not 1024<=port<=65535 or port in (STATS_PORT,STATS_PORT+1,18889):
             raise ValueError('节点端口须为 1024–65535，且不能占用面板或统计 API 端口')
         if protocol=='snell6' and settings.snell_mode=='unsafe-raw' and raw.get('acknowledge_raw')!='1':
             raise ValueError('unsafe-raw 不加密；请明确勾选风险确认，或使用 default / unshaped')
@@ -225,7 +228,9 @@ async def save_node(request,identity=None):
                     capture_output=True,text=True,timeout=10).stdout
                 candidate['private_key']=re.search(r'PrivateKey:\s*(\S+)',keys)[1]
                 candidate['public_key']=re.search(r'PublicKey:\s*(\S+)',keys)[1]
-        candidate.update(name=name,protocol=protocol,port=port,mode=mode,server_name=sni,
+        group_name=str(raw.get('group_name','')).strip();comment=str(raw.get('comment','')).strip()
+        if len(group_name)>60 or len(comment)>500:raise ValueError('分组最多 60 字，备注最多 500 字')
+        candidate.update(group_name=group_name,comment=comment,name=name,protocol=protocol,port=port,mode=mode,server_name=sni,
                          options=json.dumps(settings.model_dump()))
         # Check a populated inbound, including nodes that currently have no users.
         from .core import config
@@ -244,14 +249,14 @@ async def save_node(request,identity=None):
                 raise ValueError('该端口已用于其他节点')
             if db.execute('SELECT 1 FROM memberships WHERE port=? AND node_id<>?',(port,candidate['id'])).fetchone():
                 raise ValueError('该端口已分配给其他节点的用户')
-            fields=('name','protocol','port','secret','private_key','public_key','short_id','server_name','mode','options')
+            fields=('name','protocol','port','secret','private_key','public_key','short_id','server_name','mode','options','group_name','comment')
             if node:
                 db.execute('UPDATE nodes SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',
                            tuple(candidate[k] for k in fields)+(candidate['id'],))
             else:
                 db.execute('INSERT INTO nodes(id,'+','.join(fields)+') VALUES('+','.join('?' for _ in range(len(fields)+1))+')',
                            (candidate['id'],)+tuple(candidate[k] for k in fields))
-        return RedirectResponse('/',status_code=303)
+        return RedirectResponse('/nodes',status_code=303)
     except ValidationError as e:
         error='；'.join('.'.join(map(str,x['loc']))+': '+x['msg'] for x in e.errors())
     except (ValueError,subprocess.SubprocessError) as e:
@@ -279,7 +284,7 @@ def create_user(request: Request, token: str = Form(...), name: str = Form(...),
         uid=uuid.uuid4().hex
         db.execute('INSERT INTO users(id,name,secret,uuid,token,quota,expires) VALUES(?,?,?,?,?,?,?)',
                    (uid,valid_name(name),secrets.token_urlsafe(24),str(uuid.uuid4()),secrets.token_urlsafe(32),quota,expires))
-        set_memberships(db,uid,node_ids,(STATS_PORT,18889))
+        set_memberships(db,uid,node_ids,(STATS_PORT,STATS_PORT+1,18889))
     return RedirectResponse('/',status_code=303)
 
 @app.post('/{kind}/{identity}/action')
@@ -301,7 +306,7 @@ def action(request: Request, kind: str, identity: str, token: str = Form(...), a
                 raise HTTPException(404)
             if kind=='nodes' and action=='randomize':
                 try:
-                    rotate_ports(db,identity,(STATS_PORT,18889))
+                    rotate_ports(db,identity,(STATS_PORT,STATS_PORT+1,18889))
                 except ValueError as e:
                     raise HTTPException(422,str(e))
             elif action=='toggle':
@@ -317,7 +322,7 @@ def action(request: Request, kind: str, identity: str, token: str = Form(...), a
                 if not set(node_ids)<={r[0] for r in db.execute('SELECT id FROM nodes')}:
                     raise HTTPException(422,'节点不存在')
                 db.execute('UPDATE users SET quota=?,expires=? WHERE id=?',(quota,expires,identity))
-                set_memberships(db,identity,node_ids,(STATS_PORT,18889))
+                set_memberships(db,identity,node_ids,(STATS_PORT,STATS_PORT+1,18889))
             else:
                 raise HTTPException(422)
     return RedirectResponse('/',status_code=303)
@@ -396,10 +401,18 @@ def subscription(token: str, format: str):
     from .subscriptions import native_subscription
     if format not in ('surge.conf','shadowrocket.txt'):
         raise HTTPException(404)
-    return Response(native_subscription(outs,format),media_type='text/plain',headers=headers)
+    body=native_subscription(outs,format)
+    if format=='shadowrocket.txt' and not reason(user) and user.get('external_cache'):
+        import base64
+        body=base64.b64encode((base64.b64decode(body).decode()+user['external_cache']+'\n').encode()).decode()
+    return Response(body,media_type='text/plain',headers=headers)
 
 @app.get('/health')
 def health():
     running=runtime.process is not None and runtime.process.poll() is None
     return Response(json.dumps({'ok':running and not runtime.error}),media_type='application/json',
                     status_code=200 if running and not runtime.error else 503)
+
+from .admin import install
+import sys
+install(app,sys.modules[__name__])

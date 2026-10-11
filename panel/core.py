@@ -51,6 +51,8 @@ def init_db(path):
         if 'options' not in {r[1] for r in db.execute('PRAGMA table_info(nodes)')}:
             db.execute("ALTER TABLE nodes ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_member_port ON memberships(port) WHERE port>0')
+        from .management import migrate
+        migrate(db)
 
 def records(path, table):
     if table not in ('nodes','users','memberships'):
@@ -126,6 +128,14 @@ def account(path, epoch, counters, day=None):
             if previous and value<previous[0]:
                 raise ValueError('counter regressed inside one core epoch')
             delta = value-(previous[0] if previous else 0)
+            if delta>0:
+                row=db.execute('SELECT policy,activated_at FROM users WHERE id=?',(user,)).fetchone()
+                policy=json.loads(row['policy'])
+                if policy.get('first_use_days') and not row['activated_at']:
+                    activated=int(time.time())
+                    db.execute('UPDATE users SET activated_at=?,expires=? WHERE id=?',(activated,activated+policy['first_use_days']*86400,user))
+                elif not row['activated_at']:
+                    db.execute('UPDATE users SET activated_at=? WHERE id=?',(int(time.time()),user))
             col = 'upload' if parts[3]=='uplink' else 'download'
             db.execute(f'UPDATE users SET {col}={col}+? WHERE id=?',(delta,user))
             db.execute(f'''INSERT INTO daily(day,user_id,{col}) VALUES(?,?,?)
@@ -156,7 +166,7 @@ def port_available(port):
 
 def random_port(db, reserved_ports=()):
     used = {r[0] for r in db.execute('SELECT port FROM nodes UNION SELECT port FROM memberships')}
-    used.update((18889, 19090, *reserved_ports))
+    used.update((18889, 19090, 19091, *reserved_ports))
     candidates = list(set(range(20000, 65001)) - used)
     secrets.SystemRandom().shuffle(candidates)
     for port in candidates:
