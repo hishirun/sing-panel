@@ -3,6 +3,7 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from .options import listen_options, snell_options, reality_tls, options
 
 PROTOCOLS = ('snell5', 'snell6', 'reality')
 
@@ -43,6 +44,8 @@ def init_db(path):
             db.execute("ALTER TABLE nodes ADD COLUMN mode TEXT NOT NULL DEFAULT 'shared'")
         if 'port' not in {r[1] for r in db.execute('PRAGMA table_info(memberships)')}:
             db.execute('ALTER TABLE memberships ADD COLUMN port INTEGER NOT NULL DEFAULT 0')
+        if 'options' not in {r[1] for r in db.execute('PRAGMA table_info(nodes)')}:
+            db.execute("ALTER TABLE nodes ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_member_port ON memberships(port) WHERE port>0')
 
 def records(path, table):
@@ -75,18 +78,17 @@ def config(nodes, users, memberships, stats_port=19090):
             for u in allowed:
                 tag=n['id']+':'+u['id']
                 compat_tags.append(tag)
-                inbounds.append({'tag':tag,'listen':'::','listen_port':grants[(u['id'],n['id'])]['port'],
-                    'type':'snell','version':int(n['protocol'][-1]),'psk':u['secret']})
+                inbounds.append({'tag':tag,'listen_port':grants[(u['id'],n['id'])]['port'],
+                    'type':'snell','version':int(n['protocol'][-1]),'psk':u['secret'],
+                    **listen_options(n),**snell_options(n)})
             continue
-        i = {'tag': n['id'], 'listen': '::', 'listen_port': n['port']}
+        i = {'tag': n['id'], 'listen_port': n['port'], **listen_options(n)}
         if n['protocol'] in ('snell5', 'snell6'):
             i.update(type='snell', version=int(n['protocol'][-1]), psk=n['secret'],
-                     users=[{'name': u['id'], 'userkey': u['secret']} for u in allowed])
+                     users=[{'name': u['id'], 'userkey': u['secret']} for u in allowed], **snell_options(n))
         else:
-            i.update(type='vless', users=[{'name':u['id'],'uuid':u['uuid'],'flow':'xtls-rprx-vision'} for u in allowed],
-                     tls={'enabled':True, 'server_name':n['server_name'], 'reality':{
-                         'enabled':True, 'handshake':{'server':n['server_name'],'server_port':443},
-                         'private_key':n['private_key'],'short_id':[n['short_id']]}})
+            i.update(type='vless', users=[{'name':u['id'],'uuid':u['uuid'],'flow':options(n)['flow']} for u in allowed],
+                     tls=reality_tls(n))
         inbounds.append(i)
     return {'log': {'level': 'warn', 'timestamp': True}, 'inbounds': inbounds,
             'outbounds': [{'type': 'direct', 'tag': 'direct'}],

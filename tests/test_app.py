@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import re
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
@@ -15,6 +16,8 @@ def client(tmp_path,monkeypatch):
     monkeypatch.setattr(module.runtime,'start',lambda:None)
     monkeypatch.setattr(module.runtime,'stop',lambda:None)
     monkeypatch.setattr(module.runtime,'sample',lambda:None)
+    if not os.environ.get('SING_BOX'):
+        monkeypatch.setattr(module,'check_document',lambda doc:None)
     with TestClient(module.app) as c:
         page=c.get('/login')
         token=re.search('name="token" value="([^"]+)"',page.text)[1]
@@ -55,3 +58,44 @@ def test_unauthenticated_admin_hidden(client):
     c.cookies.clear()
     assert c.post('/users',data={'name':'intruder','token':'x'}).status_code==401
     assert c.get('/s/invalid/sing-box.json').status_code==404
+
+def test_edit_node_and_unsafe_mode_requires_acknowledgement(client):
+    c,m=client
+    token=csrf(c)
+    data={'token':token,'name':'v6','protocol':'snell6','port':32001,'mode':'shared',
+          'snell_mode':'unshaped','reuse':'true','tcp_fast_open':'true'}
+    assert c.post('/nodes',data=data).status_code==200
+    node=m.records(m.DB,'nodes')[0]
+    assert json.loads(node['options'])['snell_mode']=='unshaped'
+    url=f"/nodes/{node['id']}/edit"
+    assert 'Snell v6 特征与加密' in c.get(url).text
+    data.update(snell_mode='unsafe-raw')
+    assert c.post(url,data=data).status_code==422
+    assert json.loads(m.records(m.DB,'nodes')[0]['options'])['snell_mode']=='unshaped'
+    data.update(acknowledge_raw='1')
+    assert c.post(url,data=data).status_code==200
+    assert json.loads(m.records(m.DB,'nodes')[0]['options'])['snell_mode']=='unsafe-raw'
+
+def test_reality_key_import_short_ids_and_edit_preserves_keys(client):
+    c,m=client
+    data={'token':csrf(c),'name':'Reality','protocol':'reality','port':32002,
+          'server_name':'www.cloudflare.com','private_key':'A'*43,
+          'short_ids':'aabb,11223344','fingerprint':'firefox','handshake_host':'www.cloudflare.com'}
+    assert c.post('/nodes',data=data).status_code==200
+    before=m.records(m.DB,'nodes')[0]
+    assert before['public_key'] and before['private_key']=='A'*43
+    data.update(name='Updated Reality',private_key='')
+    assert c.post(f"/nodes/{before['id']}/edit",data=data).status_code==200
+    after=m.records(m.DB,'nodes')[0]
+    assert after['private_key']==before['private_key']
+    assert after['public_key']==before['public_key']
+    assert json.loads(after['options'])['short_ids']=='aabb,11223344'
+
+def test_probe_does_not_require_node_name_or_listen_port(client,monkeypatch):
+    c,m=client
+    monkeypatch.setattr(m,'probe_tls',lambda host,port,sni:'TLSv1.3 · h2 · verified')
+    r=c.post('/nodes',data={'token':csrf(c),'protocol':'reality',
+                         'server_name':'www.cloudflare.com','intent':'probe'})
+    assert r.status_code==200
+    assert 'TLSv1.3' in r.text
+    assert m.records(m.DB,'nodes')==[]

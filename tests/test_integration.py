@@ -31,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
     def log_message(self,*args): pass
 
-@pytest.fixture(params=["shared","compat"])
+@pytest.fixture(params=[(auth,mode) for auth in ("shared","compat") for mode in ("default","unshaped","unsafe-raw")])
 def system(tmp_path,request):
     db=tmp_path/'panel.db'
     init_db(db)
@@ -41,7 +41,9 @@ def system(tmp_path,request):
     with connect(db) as c:
         for proto in ['snell5','snell6','reality']:
             c.execute('INSERT INTO nodes(id,name,protocol,port,secret,private_key,public_key,short_id,server_name,mode) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                (proto,proto,proto,port(),'node-secret-0123456789',private,public,'abcdef12','www.cloudflare.com',request.param if proto!='reality' else 'shared'))
+                (proto,proto,proto,port(),'node-secret-0123456789',private,public,'abcdef12','www.cloudflare.com',request.param[0] if proto!='reality' else 'shared'))
+        c.execute("UPDATE nodes SET options=? WHERE id='snell6'",(json.dumps({'snell_mode':request.param[1],'reuse':True}),))
+        c.execute("UPDATE nodes SET options=? WHERE id='reality'",(json.dumps({'short_ids':'abcdef12,0123456789abcdef','max_time_difference':120,'handshake_timeout':8,'alpn':'h2,http/1.1','fingerprint':'chrome'}),))
         for uid in ['alice','bob']:
             c.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',
                 (uid,uid,uid+'-user-secret-0123456789','11111111-1111-4111-8111-11111111111'+('1' if uid=='alice' else '2'),uid+'-token'))

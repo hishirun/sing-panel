@@ -85,3 +85,15 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 ## 原生 systemd 部署
 
 仓库提供 [deploy/sing-panel.service](deploy/sing-panel.service)。约定代码和 Python venv 位于 `/opt/sing-panel`，统计版二进制位于 `/opt/sing-panel/sing-box`，服务用户为 `singpanel`。先创建该用户及其拥有的 `data` 目录，运行 `panel.setup`，将 `PANEL_PUBLIC_HOST` 写入 `/etc/sing-panel.env`，再安装并启动 unit。服务仅监听本机 18889；统计 API 仅监听本机 19090。停止服务时先通知主进程完成最后一次采样，再终止子进程。
+
+## 节点高级配置
+
+控制台的“新建节点”和“编辑配置”打开完整设置页；旧节点自动迁移并继承默认值。
+
+- **Snell v6**：`default`（加密 + PSK 派生流量整形）、`unshaped`（加密、不整形）、`unsafe-raw`（无加密，需显式风险确认）。支持共享节点 PSK、客户端连接复用和网络类型。v6 的具体流量特征由核心根据 PSK 派生，不存在任意手工特征模板字段。
+- **Snell v5**：HTTP 混淆及客户端 Host；v6 不使用 v5 的混淆选项。
+- **通用监听**：IPv4/IPv6 监听地址、TCP Fast Open、Multipath TCP、Keep Alive 开关与时间。功能仍取决于系统与对端支持。已有授权的独立端口节点不能直接改变端口起点或认证模式，以免悄悄更换用户端口。
+- **Reality**：SNI 与握手域名/IP 分开配置，支持握手端口与超时、允许时间差、多个 Short ID、X25519 私钥导入/自动公钥推导/密钥重生成、客户端 uTLS 指纹、Flow、ALPN。服务端只接受该入站的一个 SNI；订阅选择 Short ID 列表的第一项。服务端与导出客户端保持一致。
+- **候选 SNI**：`www.cloudflare.com`、`www.microsoft.com`、`www.apple.com`。2026-10-11 从部署主机确认 TLS 1.3 和 h2 可用；这只是当时的连接测试，不保证后续网络状态或任何地区的可用性。编辑页可重新执行证书校验和 TLS 握手检测，检测不保存节点。
+
+保存前对包含测试用户的完整入站执行 `sing-box check`，即便节点尚无授权用户，也能检查配置。字段和错误提示不会回显导入私钥或 PSK。订阅不会包含服务端私钥；修改密钥、PSK、SNI 等参数后客户端需更新配置。

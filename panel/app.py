@@ -6,6 +6,7 @@ import secrets
 import sqlite3
 import subprocess
 import time
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -21,6 +22,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships
 from .runtime import Runtime
 from .subscriptions import outbounds
+from .options import NodeOptions, PRESETS, FINGERPRINTS, options, domain, import_key, probe_tls
+from pydantic import ValidationError
 
 DIRECTORY = Path(os.environ.get('PANEL_DATA', 'data')).resolve()
 DIRECTORY.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -139,36 +142,118 @@ def valid_name(name):
         raise HTTPException(422,'名称需要 1–80 个字符')
     return name
 
-@app.post('/nodes')
-def create_node(request: Request, token: str = Form(...), name: str = Form(...),
-                protocol: str = Form(...), port: int = Form(...), server_name: str = Form(''), mode: str = Form('compat')):
+def editor(request, node=None, values=None, error='', notice='', status=200):
+    context={'name':'','protocol':'snell6','port':'','mode':'compat','server_name':'',
+             **NodeOptions().model_dump()}
+    if node:
+        context.update(node)
+        context.update(options(node))
+    if values:
+        context.update(values)
+    # Never echo imported keys or PSKs into responses.
+    context.pop('private_key',None)
+    context.pop('psk',None)
+    response=render(request,'node_editor.html',node=node,values=context,error=error,notice=notice,
+                    presets=PRESETS,fingerprints=FINGERPRINTS)
+    response.status_code=status
+    return response
+
+@app.get('/nodes/new',response_class=HTMLResponse)
+def new_node(request: Request, protocol: str='snell6'):
     authenticated(request)
-    csrf(request, token)
-    if protocol not in PROTOCOLS or not 1024<=port<=65535 or port==STATS_PORT:
-        raise HTTPException(422,'协议或端口无效')
-    name=valid_name(name)
-    if mode not in ('shared','compat'):
-        raise HTTPException(422,'用户模式无效')
-    if protocol=='reality':
-        mode='shared'
-    private=public=short=''
-    if protocol=='reality':
-        if not re.fullmatch(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}',server_name):
-            raise HTTPException(422,'Reality 需要有效的握手域名')
-        keys=subprocess.run([BINARY,'generate','reality-keypair'],check=True,capture_output=True,text=True,timeout=10).stdout
-        private=re.search(r'PrivateKey:\s*(\S+)',keys)[1]
-        public=re.search(r'PublicKey:\s*(\S+)',keys)[1]
-        short=secrets.token_hex(8)
-    with runtime.lock:
-        try:
-            with connect(DB) as db:
-                if db.execute('SELECT 1 FROM memberships WHERE port=?',(port,)).fetchone():
-                    raise HTTPException(409,'端口已分配给用户')
-                db.execute('INSERT INTO nodes(id,name,protocol,port,secret,private_key,public_key,short_id,server_name,mode) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                           (uuid.uuid4().hex,name,protocol,port,secrets.token_urlsafe(24),private,public,short,server_name,mode))
-        except sqlite3.IntegrityError:
-            raise HTTPException(409,'端口已存在')
-    return RedirectResponse('/',status_code=303)
+    if protocol not in PROTOCOLS:
+        raise HTTPException(422,'协议无效')
+    return editor(request,values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else ''})
+
+@app.get('/nodes/{identity}/edit',response_class=HTMLResponse)
+def edit_node(request: Request,identity: str):
+    authenticated(request)
+    node=next((n for n in records(DB,'nodes') if n['id']==identity),None)
+    if not node:raise HTTPException(404)
+    return editor(request,node)
+
+def check_document(document):
+    with tempfile.NamedTemporaryFile(mode='w',suffix='.json',dir=DIRECTORY) as f:
+        json.dump(document,f);f.flush()
+        check=subprocess.run([BINARY,'check','-c',f.name],capture_output=True,text=True,timeout=15)
+    if check.returncode:raise ValueError('核心配置校验失败：'+check.stderr[-1200:])
+
+async def save_node(request,identity=None):
+    authenticated(request)
+    raw=dict(await request.form())
+    csrf(request,str(raw.get('token','')))
+    node=next((n for n in records(DB,'nodes') if n['id']==identity),None) if identity else None
+    if identity and not node:raise HTTPException(404)
+    try:
+        protocol=node['protocol'] if node else str(raw.get('protocol','snell6'))
+        if protocol not in PROTOCOLS:raise ValueError('协议无效')
+        settings=NodeOptions.model_validate(raw)
+        mode='shared' if protocol=='reality' else str(raw.get('mode','compat'))
+        if mode not in ('shared','compat'):raise ValueError('用户模式无效')
+        sni=domain(str(raw.get('server_name',''))) if protocol=='reality' else ''
+        if raw.get('intent')=='probe':
+            if protocol!='reality':raise ValueError('只有 Reality 节点需要 TLS 握手检测')
+            result=probe_tls(settings.handshake_host or sni,settings.handshake_port,sni)
+            return editor(request,node,raw,notice=result)
+        name=valid_name(str(raw.get('name','')))
+        port=int(raw.get('port',0))
+        if not 1024<=port<=65535 or port in (STATS_PORT,18889):
+            raise ValueError('节点端口须为 1024–65535，且不能占用面板或统计 API 端口')
+        if protocol=='snell6' and settings.snell_mode=='unsafe-raw' and raw.get('acknowledge_raw')!='1':
+            raise ValueError('unsafe-raw 不加密；请明确勾选风险确认，或使用 default / unshaped')
+        candidate=dict(node) if node else {'id':uuid.uuid4().hex,'enabled':1,'private_key':'',
+            'public_key':'','short_id':secrets.token_hex(8),'secret':secrets.token_urlsafe(24)}
+        supplied_psk=str(raw.get('psk','')).strip()
+        if supplied_psk:
+            if not re.fullmatch(r'[A-Za-z0-9._~-]{12,255}',supplied_psk):
+                raise ValueError('PSK 需为 12–255 个字母、数字或 . _ ~ - 字符')
+            candidate['secret']=supplied_psk
+        if protocol=='reality':
+            imported=str(raw.get('private_key','')).strip()
+            if imported:
+                candidate['private_key'],candidate['public_key']=import_key(imported)
+            elif not candidate['private_key'] or raw.get('rotate_key')=='1':
+                keys=subprocess.run([BINARY,'generate','reality-keypair'],check=True,
+                    capture_output=True,text=True,timeout=10).stdout
+                candidate['private_key']=re.search(r'PrivateKey:\s*(\S+)',keys)[1]
+                candidate['public_key']=re.search(r'PublicKey:\s*(\S+)',keys)[1]
+        candidate.update(name=name,protocol=protocol,port=port,mode=mode,server_name=sni,
+                         options=json.dumps(settings.model_dump()))
+        # Check a populated inbound, including nodes that currently have no users.
+        from .core import config
+        test_user={'id':'validation','enabled':1,'quota':0,'expires':0,'upload':0,'download':0,
+                   'secret':'validation-user-key-012345','uuid':'11111111-1111-4111-8111-111111111111'}
+        document=config([candidate],[test_user],[{'node_id':candidate['id'],'user_id':'validation','port':port}],STATS_PORT)
+        check_document(document)
+        with runtime.lock, connect(DB) as db:
+            grants=db.execute('SELECT count(*) FROM memberships WHERE node_id=?',(candidate['id'],)).fetchone()[0]
+            if node and grants and (mode!=node['mode'] or (node['mode']=='compat' and port!=node['port'])):
+                raise ValueError('节点已有用户：请先撤销授权，再更改用户模式或独立端口起点')
+            if db.execute('SELECT 1 FROM nodes WHERE port=? AND id<>?',(port,candidate['id'])).fetchone():
+                raise ValueError('该端口已用于其他节点')
+            if db.execute('SELECT 1 FROM memberships WHERE port=? AND node_id<>?',(port,candidate['id'])).fetchone():
+                raise ValueError('该端口已分配给其他节点的用户')
+            fields=('name','protocol','port','secret','private_key','public_key','short_id','server_name','mode','options')
+            if node:
+                db.execute('UPDATE nodes SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',
+                           tuple(candidate[k] for k in fields)+(candidate['id'],))
+            else:
+                db.execute('INSERT INTO nodes(id,'+','.join(fields)+') VALUES('+','.join('?' for _ in range(len(fields)+1))+')',
+                           (candidate['id'],)+tuple(candidate[k] for k in fields))
+        return RedirectResponse('/',status_code=303)
+    except ValidationError as e:
+        error='；'.join('.'.join(map(str,x['loc']))+': '+x['msg'] for x in e.errors())
+    except (ValueError,subprocess.SubprocessError) as e:
+        error=str(e)
+    return editor(request,node,raw,error=error,status=422)
+
+@app.post('/nodes')
+async def create_node(request: Request):
+    return await save_node(request)
+
+@app.post('/nodes/{identity}/edit')
+async def update_node(request: Request,identity: str):
+    return await save_node(request,identity)
 
 @app.post('/users')
 def create_user(request: Request, token: str = Form(...), name: str = Form(...),
