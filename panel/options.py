@@ -133,6 +133,6 @@ def probe_tls(host,port,sni):
     try:
         with socket.create_connection((host,port),timeout=5) as sock:
             with context.wrap_socket(sock,server_hostname=sni) as tls:
-                return f"TLS {tls.version()} · ALPN {tls.selected_alpn_protocol() or '未协商'} · {round((time.monotonic()-started)*1000)} ms；证书与 SNI 校验通过"
+                return f"{tls.version()} · ALPN {tls.selected_alpn_protocol() or '未协商'} · {round((time.monotonic()-started)*1000)} ms；证书与 SNI 校验通过"
     except (OSError,ValueError) as e:
         raise ValueError(f'握手检测失败：{e}')

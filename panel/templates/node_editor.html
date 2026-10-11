@@ -48,7 +48,7 @@
 </div><aside><section><h2>TCP 连接设置</h2><div class="formgrid">
 {{ boolean('tcp_fast_open','TCP Fast Open',values.tcp_fast_open) }}
 {{ boolean('tcp_multi_path','Multipath TCP',values.tcp_multi_path) }}
-{{ boolean('disable_tcp_keep_alive','关闭 TCP Keep Alive',values.disable_tcp_keep_alive) }}
+<label>TCP Keep Alive<select name="disable_tcp_keep_alive"><option value="false" {{ 'selected' if values.disable_tcp_keep_alive not in [true,'true','1','on'] else '' }}>开启</option><option value="true" {{ 'selected' if values.disable_tcp_keep_alive in [true,'true','1','on'] else '' }}>关闭</option></select></label>
 <label>Keep Alive 空闲 / 秒<input type="number" name="keep_alive" min="1" max="86400" value="{{ values.keep_alive }}" required></label>
 <label>Keep Alive 间隔 / 秒<input type="number" name="keep_alive_interval" min="1" max="3600" value="{{ values.keep_alive_interval }}" required></label>
 </div><p class="muted"><small>Fast Open 与 Multipath TCP 需要系统及对端支持；开启不代表系统一定启用。关闭 Keep Alive 时两个时间项不会参与核心配置。</small></p></section><section><h2>配置检查</h2><p class="muted">保存前校验字段并执行 sing-box check。首次添加无授权用户时，节点不监听端口；授权后自动应用。</p><button name="intent" value="save" class="primary">{{ '保存节点配置' if node else '创建节点' }}</button></section></aside></div></form>
