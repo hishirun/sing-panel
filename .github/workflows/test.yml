@@ -1,0 +1,18 @@
+name: Test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+      - run: pip install -r requirements.txt pytest httpx
+      - name: Build statistics-enabled sing-box
+        run: go install -tags with_quic,with_utls,with_v2ray_api github.com/sagernet/sing-box/cmd/sing-box@v1.14.3
+      - name: Unit and real protocol integration tests
+        run: SING_BOX="$(go env GOPATH)/bin/sing-box" python -m pytest -q

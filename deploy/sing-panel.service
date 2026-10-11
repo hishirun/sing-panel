@@ -1,0 +1,27 @@
+[Unit]
+Description=sing-panel - sing-box node and user management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=singpanel
+Group=singpanel
+WorkingDirectory=/opt/sing-panel
+Environment=PANEL_DATA=/opt/sing-panel/data
+Environment=SING_BOX=/opt/sing-panel/sing-box
+EnvironmentFile=-/etc/sing-panel.env
+ExecStart=/opt/sing-panel/venv/bin/uvicorn panel.app:app --host 127.0.0.1 --port 18889 --no-access-log
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sing-panel/data
+
+[Install]
+WantedBy=multi-user.target
