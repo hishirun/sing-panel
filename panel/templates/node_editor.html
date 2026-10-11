@@ -14,7 +14,7 @@
 <label>监听端口（留空自动随机）<input type="number" name="port" value="{{ values.port }}" min="1024" max="65535" placeholder="自动分配 20000–65000"></label>
 <label>监听 IP<input name="listen" value="{{ values.listen }}" required></label>
 {% if values.protocol!='reality' %}<label>用户认证模式<select name="mode"><option value="compat" {{ 'selected' if values.mode=='compat' else '' }}>独立端口 · PSK 兼容（sing-box）</option><option value="shared" {{ 'selected' if values.mode=='shared' else '' }}>共享端口 · PSK + userkey</option></select></label>{% endif %}
-</div><p class="muted"><small>:: 为 IPv6 通配监听，双栈行为取决于系统；0.0.0.0 仅监听 IPv4。已有独立端口授权时，修改分配起点或认证模式需先撤销授权。</small></p></section>
+</div><p class="muted"><small>:: 为 IPv6 通配监听，双栈行为取决于系统；0.0.0.0 仅监听 IPv4。端口保存后固定；已有独立端口授权时，可在控制台重新随机分配整个节点的端口。更改认证模式需先撤销授权。</small></p></section>
 {% if values.protocol in ['snell5','snell6'] %}
 <section><h2>{{ 'Snell v6 特征与加密' if values.protocol=='snell6' else 'Snell v5 混淆' }}</h2><div class="formgrid">
 {% if values.protocol=='snell6' %}<label>流量整形模式<select name="snell_mode"><option value="default" {{ 'selected' if values.snell_mode=='default' else '' }}>default · 加密 + PSK 派生流量特征</option><option value="unshaped" {{ 'selected' if values.snell_mode=='unshaped' else '' }}>unshaped · 加密，不整形</option><option value="unsafe-raw" {{ 'selected' if values.snell_mode=='unsafe-raw' else '' }}>unsafe-raw · 不加密，仅调试</option></select></label>
