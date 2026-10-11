@@ -1,13 +1,13 @@
 {% extends 'base.html' %}
 {% macro boolean(name,label,value) %}<label>{{ label }}<select name="{{ name }}"><option value="false" {{ 'selected' if value not in [true,'true','1','on'] else '' }}>关闭</option><option value="true" {{ 'selected' if value in [true,'true','1','on'] else '' }}>开启</option></select></label>{% endmacro %}
 {% block content %}
-<header><div class="brand"><b>◈</b> sing-panel <span class="pill">节点配置</span></div><a class="button" href="/">返回控制台</a></header>
+<header><div class="brand"><b>◈</b> sing-panel <span class="pill">节点配置</span></div><a class="button" href="{{ admin_path }}/">返回控制台</a></header>
 <h1>{{ '编辑节点 · '+values.name if node else '创建节点' }}</h1>
 <p class="muted">每个选项都会用于生成核心配置或客户端配置。保存后会重新加载核心，现有连接将断开。</p>
-{% if not node %}<div class="actions"><a class="button {{ 'primary' if values.protocol=='snell6' else '' }}" href="/nodes/new?protocol=snell6">Snell v6</a><a class="button {{ 'primary' if values.protocol=='snell5' else '' }}" href="/nodes/new?protocol=snell5">Snell v5</a><a class="button {{ 'primary' if values.protocol=='reality' else '' }}" href="/nodes/new?protocol=reality">VLESS Reality</a></div><br>{% endif %}
+{% if not node %}<div class="actions"><a class="button {{ 'primary' if values.protocol=='snell6' else '' }}" href="{{ admin_path }}/nodes/new?protocol=snell6">Snell v6</a><a class="button {{ 'primary' if values.protocol=='snell5' else '' }}" href="{{ admin_path }}/nodes/new?protocol=snell5">Snell v5</a><a class="button {{ 'primary' if values.protocol=='reality' else '' }}" href="{{ admin_path }}/nodes/new?protocol=reality">VLESS Reality</a></div><br>{% endif %}
 {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 {% if notice %}<section class="good" role="status">{{ notice }}</section>{% endif %}
-<form method="post" action="{{ '/nodes/'+node.id+'/edit' if node else '/nodes' }}">
+<form method="post" action="{{ admin_path }}{{ '/nodes/'+node.id+'/edit' if node else '/nodes' }}">
 <input type="hidden" name="token" value="{{ csrf }}"><input type="hidden" name="protocol" value="{{ values.protocol }}">
 <div class="grid"><div><section><h2>基本设置</h2><div class="formgrid"><label>分组<input name="group_name" maxlength="60" value="{{ values.group_name or '' }}"></label><label>备注<input name="comment" maxlength="500" value="{{ values.comment or '' }}"></label></div><div class="formgrid">
 <label>节点名称<input name="name" value="{{ values.name }}" maxlength="80" required></label>

@@ -16,7 +16,7 @@ from .options import domain
 DEFAULT_TARGETS='Cloudflare,www.cloudflare.com,443\nMicrosoft,www.microsoft.com,443\nApple,www.apple.com,443'
 
 def read_settings(path):
-    result={'brand':'sing-panel','theme':'glass','public_url':'','support':'','monitor_targets':DEFAULT_TARGETS}
+    result={'brand':'sing-panel','theme':'glass','public_url':'','support':'','monitor_targets':DEFAULT_TARGETS,'admin_path':'','share_path':'/s'}
     with connect(path) as db:
         result.update({r['key']:r['value'] for r in db.execute('SELECT * FROM settings') if r['key'] in result})
     return result
@@ -51,8 +51,11 @@ def save_settings(path,raw):
     if theme not in ('glass','dark'):raise ValueError('主题无效')
     targets=str(raw.get('monitor_targets','')).strip()
     parse_targets(targets)
+    from .paths import validate_paths
+    existing=read_settings(path)
+    admin_path,share_path=validate_paths(raw.get('admin_path',existing['admin_path']),raw.get('share_path',existing['share_path']))
     with connect(path) as db:
-        for k,v in dict(brand=brand,theme=theme,support=support,public_url=public_url,monitor_targets=targets).items():
+        for k,v in dict(admin_path=admin_path,share_path=share_path,brand=brand,theme=theme,support=support,public_url=public_url,monitor_targets=targets).items():
             db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(k,v))
 
 def share_context(path,user,host,base):
@@ -93,7 +96,7 @@ def share_context(path,user,host,base):
                 percent=min(100,round(used/user['quota']*100,1)) if user['quota'] else 0,
                 expires=datetime.fromtimestamp(user['expires'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if user['expires'] else (f'首次使用后 {pending_days} 天' if pending_days else '长期有效'),
                 days=max(0,int((user['expires']-time.time()+86399)//86400)) if user['expires'] else None,
-                share_url=base+'/s/'+user['token'],daily=daily,daily_max=max([d['total'] for d in daily],default=1) or 1,
+                share_url=base+read_settings(path)['share_path']+'/'+user['token'],daily=daily,daily_max=max([d['total'] for d in daily],default=1) or 1,
                 monitoring=monitoring,active_count=len(active))
 
 def qr_image(text):

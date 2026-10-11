@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from .paths import EntryPaths
 from .sharing import share_context, read_settings, save_settings, qr_image, Monitor
 from starlette.middleware.sessions import SessionMiddleware
 from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships, random_port, port_available, rotate_ports
@@ -62,6 +63,8 @@ app.add_middleware(SessionMiddleware, secret_key=auth.get('session_key', secrets
                    max_age=3600*8, same_site='strict',
                    https_only=os.environ.get('PANEL_SECURE_COOKIE', '0') == '1')
 
+app.add_middleware(EntryPaths, db=DB)
+
 @app.middleware('http')
 async def headers(request, call_next):
     response = await call_next(request)
@@ -85,7 +88,7 @@ def csrf(request, token):
 def render(request, name, **context):
     request.session.setdefault('csrf', secrets.token_urlsafe(32))
     return templates.TemplateResponse(request=request, name=name,
-        context={'csrf': request.session['csrf'], 'branding':read_settings(DB), **context})
+        context={'csrf': request.session['csrf'], 'branding':read_settings(DB), 'admin_path':read_settings(DB)['admin_path'], 'share_path':read_settings(DB)['share_path'], **context})
 
 @app.get('/login', response_class=HTMLResponse)
 def login_page(request: Request):
