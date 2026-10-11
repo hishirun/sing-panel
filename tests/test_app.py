@@ -13,6 +13,8 @@ def client(tmp_path,monkeypatch):
     (tmp_path/'auth.json').write_text(json.dumps({'password_hash':PasswordHasher().hash('test-password-only'),'session_key':'test-secret-only'}))
     import panel.app as module
     module=importlib.reload(module)
+    monkeypatch.setattr(module.monitor,'start',lambda:None)
+    monkeypatch.setattr(module.monitor,'stop',lambda:None)
     monkeypatch.setattr(module.runtime,'start',lambda:None)
     monkeypatch.setattr(module.runtime,'stop',lambda:None)
     monkeypatch.setattr(module.runtime,'sample',lambda:None)
@@ -131,3 +133,67 @@ def test_manual_port_in_use_rejected(client):
                                      'mode':'shared','port':sock.getsockname()[1]})
     assert response.status_code==422
     assert m.records(m.DB,'nodes')==[]
+
+def test_share_page_scoped_configs_qr_and_password(client):
+    c,m=client
+    token=csrf(c)
+    for name in ('first','second'):
+        c.post('/nodes',data={'token':token,'name':name,'protocol':'snell6','mode':'compat'})
+    nodes=m.records(m.DB,'nodes')
+    c.post('/users',data={'token':token,'name':'Alice','node_ids':[n['id'] for n in nodes]})
+    c.post('/users',data={'token':token,'name':'Bob','node_ids':[nodes[0]['id']]})
+    alice,bob=m.records(m.DB,'users')
+    url='/s/'+alice['token']
+    page=c.get(url)
+    assert page.status_code==200
+    assert alice['secret'] in page.text and bob['secret'] not in page.text
+    assert 'first' in page.text and 'second' in page.text
+    assert '复制节点链接' in page.text and '节点延迟监控' in page.text
+    assert c.get(url+'/qr/'+nodes[0]['id']).headers['content-type'].startswith('image/svg+xml')
+    assert c.get(url+'/qr/page').status_code==200
+    assert c.post(url+'/psk',data={'csrf_token':'bad','psk':'new-secret-012345'}).status_code==403
+    page_token=re.search('name="csrf_token" value="([^"]+)"',page.text)[1]
+    response=c.post(url+'/psk',data={'csrf_token':page_token,'psk':'new-secret-012345'})
+    assert response.status_code==200
+    assert 'new-secret-012345' in response.text
+    assert m.records(m.DB,'users')[1]['secret']==bob['secret']
+    outs=c.get(url+'/sing-box.json').json()['outbounds']
+    assert len(outs)==2 and all(o['psk']=='new-secret-012345' for o in outs)
+    assert c.post(url+'/psk',data={'csrf_token':page_token}).status_code==429
+    c.post('/users/'+alice['id']+'/action',data={'token':csrf(c),'action':'toggle'})
+    assert 'new-secret-012345' not in c.get(url).text
+    assert c.get(url+'/qr/'+nodes[0]['id']).status_code==404
+
+def test_share_settings_validation_and_branding(client):
+    c,m=client
+    token=csrf(c)
+    settings={'token':token,'brand':'My Panel','public_url':'https://example.com','support':'Contact admin',
+              'monitor_targets':'Test,example.com,443'}
+    assert c.post('/settings',data=settings).status_code==200
+    assert 'My Panel' in c.get('/').text
+    c.post('/users',data={'token':token,'name':'Alice'})
+    user=m.records(m.DB,'users')[0]
+    page=c.get('/s/'+user['token'])
+    assert 'https://example.com/s/'+user['token'] in page.text
+    assert 'Contact admin' in page.text
+    settings['public_url']='javascript:alert(1)'
+    assert '公开地址' in c.post('/settings',data=settings).text
+    from panel.sharing import read_settings
+    assert read_settings(m.DB)['public_url']=='https://example.com'
+
+def test_monitor_records_success_and_failure(client,monkeypatch):
+    c,m=client
+    from panel.sharing import Monitor
+    class Connected:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+    monkeypatch.setattr('panel.sharing.socket.create_connection',lambda *a,**k:Connected())
+    monitor=Monitor(m.DB)
+    monitor.collect()
+    with m.connect(m.DB) as db:
+        assert db.execute('SELECT count(*) FROM monitor_samples WHERE ms IS NOT NULL').fetchone()[0]==3
+    def fail(*a,**k):raise OSError('offline')
+    monkeypatch.setattr('panel.sharing.socket.create_connection',fail)
+    monitor.collect()
+    with m.connect(m.DB) as db:
+        assert db.execute('SELECT count(*) FROM monitor_samples WHERE ms IS NULL').fetchone()[0]==3

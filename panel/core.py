@@ -38,6 +38,8 @@ def init_db(path):
         CREATE TABLE IF NOT EXISTS samples (
           epoch TEXT NOT NULL, counter TEXT NOT NULL, value INTEGER NOT NULL,
           PRIMARY KEY(epoch,counter));
+        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS monitor_samples (target TEXT NOT NULL, timestamp INTEGER NOT NULL, ms REAL, PRIMARY KEY(target,timestamp));
         CREATE TABLE IF NOT EXISTS daily (
           day TEXT NOT NULL, user_id TEXT NOT NULL, upload INTEGER NOT NULL DEFAULT 0,
           download INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day,user_id));

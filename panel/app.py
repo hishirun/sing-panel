@@ -18,6 +18,8 @@ from argon2.exceptions import VerificationError
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from .sharing import share_context, read_settings, save_settings, qr_image, Monitor
 from starlette.middleware.sessions import SessionMiddleware
 from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships, random_port, port_available, rotate_ports
 from .runtime import Runtime
@@ -45,12 +47,16 @@ async def lifespan(app):
     if not AUTH.exists():
         raise RuntimeError('Run python -m panel.setup to create administrator credentials first')
     runtime.start()
+    monitor.start()
     yield
+    monitor.stop()
     runtime.stop()
 
 # Startup fails without setup; no default credentials.
 auth = json.loads(AUTH.read_text()) if AUTH.exists() else {}
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+monitor = Monitor(DB)
+app.mount('/static', StaticFiles(directory=str(Path(__file__).parent / 'static')), name='static')
 app.add_middleware(SessionMiddleware, secret_key=auth.get('session_key', secrets.token_hex(32)),
                    max_age=3600*8, same_site='strict',
                    https_only=os.environ.get('PANEL_SECURE_COOKIE', '0') == '1')
@@ -77,7 +83,7 @@ def csrf(request, token):
 def render(request, name, **context):
     request.session.setdefault('csrf', secrets.token_urlsafe(32))
     return templates.TemplateResponse(request=request, name=name,
-        context={'csrf': request.session['csrf'], **context})
+        context={'csrf': request.session['csrf'], 'branding':read_settings(DB), **context})
 
 @app.get('/login', response_class=HTMLResponse)
 def login_page(request: Request):
@@ -125,7 +131,8 @@ def dashboard(request: Request):
         daily = [dict(r) for r in db.execute('SELECT day,SUM(upload+download) total FROM daily GROUP BY day ORDER BY day DESC LIMIT 14')]
     return render(request, 'dashboard.html', users=users, nodes=nodes, daily=daily,
                   error=runtime.error, total=sum(u['upload']+u['download'] for u in users),
-                  active=sum(not u['state'] for u in users), host=PUBLIC_HOST)
+                  active=sum(not u['state'] for u in users), host=PUBLIC_HOST,
+                  share_base=read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
 
 def validate_limits(quota_gib, expiry):
     if not 0 <= quota_gib <= 1_000_000:
@@ -322,11 +329,58 @@ def subscription_user(token):
         raise HTTPException(404)
     return dict(row)
 
+@app.get('/settings', response_class=HTMLResponse)
+def settings_page(request: Request):
+    authenticated(request)
+    return render(request,'settings.html',settings=read_settings(DB))
+
+@app.post('/settings')
+async def settings_save(request: Request):
+    authenticated(request)
+    raw=dict(await request.form())
+    csrf(request,str(raw.get('token','')))
+    try:
+        save_settings(DB,raw)
+    except ValueError as e:
+        return render(request,'settings.html',settings=raw,error=str(e))
+    return RedirectResponse('/settings',status_code=303)
+
 @app.get('/s/{token}', response_class=HTMLResponse)
-def customer(request: Request, token: str):
+def customer(request: Request, token: str, changed: bool=False):
     user=subscription_user(token)
-    nodes=[n for n in records(DB,'nodes') if any(m['user_id']==user['id'] and m['node_id']==n['id'] for m in records(DB,'memberships'))]
-    return render(request,'customer.html',user=user,nodes=nodes,status=reason(user),subtoken=token)
+    context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
+    return render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed)
+
+@app.get('/s/{token}/qr/{kind}')
+def customer_qr(request: Request, token: str, kind: str):
+    user=subscription_user(token)
+    context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
+    if kind=='page':
+        text=context['share_url']
+    elif kind=='subscription':
+        text=context['share_url']+'/shadowrocket.txt'
+    else:
+        node=next((n for n in context['nodes'] if n['id']==kind),None)
+        if not node or not node['uri']:raise HTTPException(404)
+        text=node['uri']
+    return Response(qr_image(text),media_type='image/svg+xml')
+
+@app.post('/s/{token}/psk')
+def customer_psk(request: Request, token: str, csrf_token: str=Form(...), psk: str=Form('')):
+    user=subscription_user(token)
+    csrf(request,csrf_token)
+    if reason(user):raise HTTPException(403,'当前订阅已停用，无法修改密码')
+    psk=psk.strip() or secrets.token_urlsafe(24)
+    if not re.fullmatch(r'[A-Za-z0-9._~-]{12,255}',psk):
+        raise HTTPException(422,'密码须为 12–255 个字母、数字或 . _ ~ - 字符')
+    with runtime.lock, connect(DB) as db:
+        db.execute('BEGIN IMMEDIATE')
+        key='psk_changed:'+user['id']
+        last=db.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
+        if last and time.time()-float(last[0])<20:raise HTTPException(429,'请 20 秒后再修改密码')
+        db.execute('UPDATE users SET secret=? WHERE id=?',(psk,user['id']))
+        db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,str(time.time())))
+    return RedirectResponse('/s/'+token+'?changed=true',status_code=303)
 
 @app.get('/s/{token}/{format}')
 def subscription(token: str, format: str):
