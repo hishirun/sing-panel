@@ -65,7 +65,8 @@ def test_compat_ports_preserved_and_native_exports(db):
         c.execute("INSERT INTO users(id,name,secret,uuid,token) VALUES('bob','Bob','bob-secret','bob-uuid','bob-token')")
         set_memberships(c,'bob',['n'])
         set_memberships(c,'alice',['n'])
-    assert [m['port'] for m in records(db,'memberships')]==[32000,32001]
+    ports=[m['port'] for m in records(db,'memberships')]
+    assert ports[0]==32000 and ports[1]!=32000 and 20000<=ports[1]<=65000
     doc=current_config(db)
     assert doc['inbounds'][0]['psk']=='secret'
     assert 'users' not in doc['inbounds'][0]

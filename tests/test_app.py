@@ -99,3 +99,35 @@ def test_probe_does_not_require_node_name_or_listen_port(client,monkeypatch):
     assert r.status_code==200
     assert 'TLSv1.3' in r.text
     assert m.records(m.DB,'nodes')==[]
+
+def test_random_node_ports_and_rotation(client):
+    c,m=client
+    token=csrf(c)
+    for name in ('one','two'):
+        assert c.post('/nodes',data={'token':token,'name':name,'protocol':'snell6','mode':'compat'}).status_code==200
+    nodes=m.records(m.DB,'nodes')
+    assert len({n['port'] for n in nodes})==2
+    assert all(20000<=n['port']<=65000 for n in nodes)
+    node=nodes[0]
+    for name in ('alice','bob'):
+        assert c.post('/users',data={'token':token,'name':name,'node_ids':node['id']}).status_code==200
+    old={row['port'] for row in m.records(m.DB,'memberships')}
+    assert node['port'] in old and len(old)==2
+    assert c.post(f"/nodes/{node['id']}/action",data={'token':token,'action':'randomize'}).status_code==200
+    new={row['port'] for row in m.records(m.DB,'memberships')}
+    assert len(new)==2 and not old & new
+    changed=m.records(m.DB,'nodes')[0]
+    assert changed['port'] in new
+    assert nodes[1]==m.records(m.DB,'nodes')[1]
+    assert c.get('/').status_code==200
+    assert new=={row['port'] for row in m.records(m.DB,'memberships')}
+
+def test_manual_port_in_use_rejected(client):
+    import socket
+    c,m=client
+    with socket.socket() as sock:
+        sock.bind(('0.0.0.0',0))
+        response=c.post('/nodes',data={'token':csrf(c),'name':'occupied','protocol':'snell6',
+                                     'mode':'shared','port':sock.getsockname()[1]})
+    assert response.status_code==422
+    assert m.records(m.DB,'nodes')==[]

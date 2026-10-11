@@ -1,6 +1,8 @@
 """Node configuration and durable per-user accounting."""
 import json
 import sqlite3
+import secrets
+import socket
 import time
 from pathlib import Path
 from .options import listen_options, snell_options, reality_tls, options
@@ -129,6 +131,52 @@ def account(path, epoch, counters, day=None):
             db.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?)',(epoch,counter,value))
 
 
+def port_available(port):
+    """Probe TCP and UDP on both address families without reusing live sockets."""
+    from contextlib import ExitStack
+    try:
+        with ExitStack() as stack:
+            for family, address in ((socket.AF_INET, '0.0.0.0'), (socket.AF_INET6, '::')):
+                for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+                    try:
+                        sock = socket.socket(family, kind)
+                    except OSError:
+                        if family == socket.AF_INET6:
+                            continue
+                        raise
+                    stack.enter_context(sock)
+                    if family == socket.AF_INET6:
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                    sock.bind((address, port))
+        return True
+    except OSError:
+        return False
+
+def random_port(db, reserved_ports=()):
+    used = {r[0] for r in db.execute('SELECT port FROM nodes UNION SELECT port FROM memberships')}
+    used.update((18889, 19090, *reserved_ports))
+    candidates = list(set(range(20000, 65001)) - used)
+    secrets.SystemRandom().shuffle(candidates)
+    for port in candidates:
+        if port_available(port):
+            return port
+    raise ValueError('没有可用的随机端口')
+
+def rotate_ports(db, node_id, reserved_ports=()):
+    """Caller holds the runtime lock and a write transaction."""
+    node = db.execute('SELECT * FROM nodes WHERE id=?', (node_id,)).fetchone()
+    reserved_ports = (*reserved_ports, node['port'], *(r[0] for r in db.execute('SELECT port FROM memberships WHERE node_id=?', (node_id,))))
+    port = random_port(db, reserved_ports)
+    db.execute('UPDATE nodes SET port=? WHERE id=?', (port, node_id))
+    if node['mode'] == 'compat':
+        members = list(db.execute('SELECT user_id FROM memberships WHERE node_id=? ORDER BY rowid', (node_id,)))
+        for index, member in enumerate(members):
+            dedicated = port if index == 0 else random_port(db, reserved_ports)
+            db.execute('UPDATE memberships SET port=? WHERE node_id=? AND user_id=?',
+                       (dedicated, node_id, member['user_id']))
+    return port
+
+
 def set_memberships(db, user_id, node_ids, reserved_ports=()):
     """Preserve existing dedicated ports; assign collision-free ports to new grants."""
     node_ids=set(node_ids)
@@ -143,9 +191,6 @@ def set_memberships(db, user_id, node_ids, reserved_ports=()):
         dedicated=0
         if node['mode']=='compat':
             used={r[0] for r in db.execute('SELECT port FROM memberships WHERE port>0')}
-            used.update(n['port'] for n in nodes.values() if n['id']!=nid)
-            used.update(reserved_ports)
-            dedicated=next((p for p in range(node['port'],65536) if p not in used),None)
-            if dedicated is None:
-                raise ValueError('没有可用的独立端口')
+            # The first user inherits the node's saved port; subsequent users get random ports.
+            dedicated = node['port'] if node['port'] not in used and port_available(node['port']) else random_port(db, reserved_ports)
         db.execute('INSERT INTO memberships(user_id,node_id,port) VALUES(?,?,?)',(user_id,nid,dedicated))

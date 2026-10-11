@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships
+from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships, random_port, port_available, rotate_ports
 from .runtime import Runtime
 from .subscriptions import outbounds
 from .options import NodeOptions, PRESETS, FINGERPRINTS, options, domain, import_key, probe_tls
@@ -196,7 +196,8 @@ async def save_node(request,identity=None):
             result=probe_tls(settings.handshake_host or sni,settings.handshake_port,sni)
             return editor(request,node,raw,notice=result)
         name=valid_name(str(raw.get('name','')))
-        port=int(raw.get('port',0))
+        with connect(DB) as db:
+            port=int(raw['port']) if str(raw.get('port','')).strip() else (node['port'] if node else random_port(db,(STATS_PORT,18889)))
         if not 1024<=port<=65535 or port in (STATS_PORT,18889):
             raise ValueError('节点端口须为 1024–65535，且不能占用面板或统计 API 端口')
         if protocol=='snell6' and settings.snell_mode=='unsafe-raw' and raw.get('acknowledge_raw')!='1':
@@ -226,9 +227,12 @@ async def save_node(request,identity=None):
         document=config([candidate],[test_user],[{'node_id':candidate['id'],'user_id':'validation','port':port}],STATS_PORT)
         check_document(document)
         with runtime.lock, connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+            if (not node or port != node['port']) and not port_available(port):
+                raise ValueError('该端口已被系统中的服务占用')
             grants=db.execute('SELECT count(*) FROM memberships WHERE node_id=?',(candidate['id'],)).fetchone()[0]
             if node and grants and (mode!=node['mode'] or (node['mode']=='compat' and port!=node['port'])):
-                raise ValueError('节点已有用户：请先撤销授权，再更改用户模式或独立端口起点')
+                raise ValueError('节点已有用户：请先撤销授权，再更改用户模式或独立端口')
             if db.execute('SELECT 1 FROM nodes WHERE port=? AND id<>?',(port,candidate['id'])).fetchone():
                 raise ValueError('该端口已用于其他节点')
             if db.execute('SELECT 1 FROM memberships WHERE port=? AND node_id<>?',(port,candidate['id'])).fetchone():
@@ -268,7 +272,7 @@ def create_user(request: Request, token: str = Form(...), name: str = Form(...),
         uid=uuid.uuid4().hex
         db.execute('INSERT INTO users(id,name,secret,uuid,token,quota,expires) VALUES(?,?,?,?,?,?,?)',
                    (uid,valid_name(name),secrets.token_urlsafe(24),str(uuid.uuid4()),secrets.token_urlsafe(32),quota,expires))
-        set_memberships(db,uid,node_ids,(STATS_PORT,))
+        set_memberships(db,uid,node_ids,(STATS_PORT,18889))
     return RedirectResponse('/',status_code=303)
 
 @app.post('/{kind}/{identity}/action')
@@ -285,9 +289,15 @@ def action(request: Request, kind: str, identity: str, token: str = Form(...), a
             except Exception:
                 raise HTTPException(503,'统计暂不可用，请恢复后再重置')
         with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
             if not db.execute(f'SELECT 1 FROM {kind} WHERE id=?',(identity,)).fetchone():
                 raise HTTPException(404)
-            if action=='toggle':
+            if kind=='nodes' and action=='randomize':
+                try:
+                    rotate_ports(db,identity,(STATS_PORT,18889))
+                except ValueError as e:
+                    raise HTTPException(422,str(e))
+            elif action=='toggle':
                 db.execute(f'UPDATE {kind} SET enabled=1-enabled WHERE id=?',(identity,))
             elif action=='delete':
                 db.execute(f'DELETE FROM {kind} WHERE id=?',(identity,))
@@ -300,7 +310,7 @@ def action(request: Request, kind: str, identity: str, token: str = Form(...), a
                 if not set(node_ids)<={r[0] for r in db.execute('SELECT id FROM nodes')}:
                     raise HTTPException(422,'节点不存在')
                 db.execute('UPDATE users SET quota=?,expires=? WHERE id=?',(quota,expires,identity))
-                set_memberships(db,identity,node_ids,(STATS_PORT,))
+                set_memberships(db,identity,node_ids,(STATS_PORT,18889))
             else:
                 raise HTTPException(422)
     return RedirectResponse('/',status_code=303)

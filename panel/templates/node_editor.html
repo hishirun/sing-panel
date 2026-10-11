@@ -11,9 +11,9 @@
 <input type="hidden" name="token" value="{{ csrf }}"><input type="hidden" name="protocol" value="{{ values.protocol }}">
 <div class="grid"><div><section><h2>基本设置</h2><div class="formgrid">
 <label>节点名称<input name="name" value="{{ values.name }}" maxlength="80" required></label>
-<label>{{ '端口分配起点' if values.mode=='compat' and values.protocol!='reality' else '监听端口' }}<input type="number" name="port" value="{{ values.port }}" min="1024" max="65535" required></label>
+<label>监听端口（留空自动随机）<input type="number" name="port" value="{{ values.port }}" min="1024" max="65535" placeholder="自动分配 20000–65000"></label>
 <label>监听 IP<input name="listen" value="{{ values.listen }}" required></label>
-{% if values.protocol!='reality' %}<label>用户认证模式<select name="mode"><option value="compat" {{ 'selected' if values.mode=='compat' else '' }}>独立端口 · 原生 PSK</option><option value="shared" {{ 'selected' if values.mode=='shared' else '' }}>共享端口 · PSK + userkey</option></select></label>{% endif %}
+{% if values.protocol!='reality' %}<label>用户认证模式<select name="mode"><option value="compat" {{ 'selected' if values.mode=='compat' else '' }}>独立端口 · PSK 兼容（sing-box）</option><option value="shared" {{ 'selected' if values.mode=='shared' else '' }}>共享端口 · PSK + userkey</option></select></label>{% endif %}
 </div><p class="muted"><small>:: 为 IPv6 通配监听，双栈行为取决于系统；0.0.0.0 仅监听 IPv4。已有独立端口授权时，修改分配起点或认证模式需先撤销授权。</small></p></section>
 {% if values.protocol in ['snell5','snell6'] %}
 <section><h2>{{ 'Snell v6 特征与加密' if values.protocol=='snell6' else 'Snell v5 混淆' }}</h2><div class="formgrid">
