@@ -77,6 +77,20 @@ async def headers(request, call_next):
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'inline-speculation-rules'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     return response
 
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, error: HTTPException):
+    from fastapi.exception_handlers import http_exception_handler
+    if error.status_code == 401 and error.detail == '请先登录':
+        browser = ('text/html' in request.headers.get('accept', '') or
+                   request.headers.get('sec-fetch-dest') == 'document' or
+                   request.headers.get('x-panel-navigation') == '1')
+        if request.method in ('GET', 'HEAD') and browser:
+            return RedirectResponse('/login?expired=1', status_code=303)
+    response = await http_exception_handler(request, error)
+    if response.headers.get('content-type', '').startswith('application/json'):
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    return response
+
 def authenticated(request):
     if not request.session.get('admin') or request.session.get('auth_revision',0)!=auth.get('revision',0):
         request.session.clear()
@@ -95,7 +109,7 @@ def render(request, name, **context):
 
 @app.get('/login', response_class=HTMLResponse)
 def login_page(request: Request):
-    return render(request, 'login.html')
+    return render(request, 'login.html', notice='登录状态已失效，请重新登录' if request.query_params.get('expired') == '1' else '')
 
 @app.post('/login')
 def login(request: Request, password: str = Form(...), token: str = Form(...)):

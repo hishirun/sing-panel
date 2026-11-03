@@ -20,7 +20,7 @@ window.panelAsyncForms=true;
  }
  async function navigate(url,push=true){
   const id=++sequence;pending?.abort();pending=new AbortController();loading(true);
-  try{const response=await fetch(url,{signal:pending.signal,credentials:'same-origin',cache:'no-store',headers:{'X-Panel-Navigation':'1'}});if(!response.ok||!response.headers.get('content-type')?.includes('text/html'))throw Error('navigation');const html=new DOMParser().parseFromString(await response.text(),'text/html');if(id!==sequence)return;await render(html,response.url,{push});}
+  try{const response=await fetch(url,{signal:pending.signal,credentials:'same-origin',cache:'no-store',headers:{'X-Panel-Navigation':'1'}});if(response.status===401){location.assign(prefix()+'/login?expired=1');return;}if(!response.ok||!response.headers.get('content-type')?.includes('text/html'))throw Error('navigation');const html=new DOMParser().parseFromString(await response.text(),'text/html');if(id!==sequence)return;if(!html.body.classList.contains('admin-shell')){location.assign(response.url);return;}await render(html,response.url,{push});}
   catch(error){if(error.name!=='AbortError'&&id===sequence)location.assign(url);}
   finally{if(id===sequence){loading(false);pending=null;}}
  }
@@ -36,6 +36,7 @@ window.panelAsyncForms=true;
   const buttons=[...form.querySelectorAll('button,input[type=submit]')];const states=buttons.map(b=>b.disabled);buttons.forEach(b=>b.disabled=true);loading(true);
   try{
    const response=await fetch(url,{method,body:data,credentials:'same-origin',headers:{'X-Panel-Navigation':'1'}});
+   if(response.status===401){location.assign(prefix()+'/login?expired=1');return;}
    if(!response.headers.get('content-type')?.includes('text/html')){let detail='操作未完成，请稍后重试';try{const result=await response.json();if(typeof result.detail==='string')detail=result.detail;}catch(_){}window.panelToast(detail,true);return;}
    const html=new DOMParser().parseFromString(await response.text(),'text/html'),next=html.getElementById('admin-content');
    if(!next||!html.body.classList.contains('admin-shell')){location.assign(response.url);return;}
