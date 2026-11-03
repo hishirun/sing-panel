@@ -168,3 +168,34 @@ def test_rule_order_default_exit_and_invalid_final_rollback(routing_client):
     assert r.load(m.DB)==old
     c.post('/routing/outbounds/'+identity+'/toggle',data={'token':t})
     assert r.load(m.DB)==old
+
+def test_geo_catalog_multiselect_logic_and_core(tmp_path):
+    import copy
+    raw={'name':'Geo','target':'direct','geoip':['cn','us'],'geosite':['google','github'],'port':'443'}
+    rule=r.rule_input(raw,[],[])
+    settings=copy.deepcopy(r.DEFAULT);settings['rules']=[dict(id='geo',enabled=True,**rule)]
+    document=r.compile_into({'inbounds':[],'outbounds':[{'type':'direct','tag':'direct'}]},settings)
+    compiled=document['route']['rules'][0]
+    assert compiled['type']=='logical' and compiled['mode']=='and'
+    assert compiled['rules']==[{'port':[443]},{'rule_set':['geosite-google','geosite-github']},{'rule_set':['geoip-cn','geoip-us']}]
+    assert len(document['route']['rule_set'])==4
+    assert all(x['http_client']=={'detour':'direct'} for x in document['route']['rule_set'])
+    with pytest.raises(ValueError):r.rule_input({**raw,'geoip':['../../secret']},[],[])
+    if BINARY:
+        # Real core schema check uses deterministic local seed files, no network.
+        source=tmp_path/'source.json';source.write_text('{"version":3,"rules":[{"domain_suffix":["example.com"]}]}')
+        binary=tmp_path/'test.srs'
+        subprocess.run([BINARY,'rule-set','compile',str(source),'-o',str(binary)],check=True,capture_output=True)
+        for entry in document['route']['rule_set']:entry['initial_path']=str(binary)
+        configfile=tmp_path/'geo.json';configfile.write_text(json.dumps(document))
+        result=subprocess.run([BINARY,'check','-c',str(configfile)],capture_output=True,text=True)
+        assert result.returncode==0,result.stderr
+
+def test_geo_form_choices_and_failed_download_keeps_settings(routing_client,monkeypatch):
+    c,m=routing_client;t=csrf(c)
+    page=c.get('/routing/rules/new').text
+    assert 'name="geosite" multiple' in page and 'value="google"' in page and 'value="cn"' in page
+    old=r.load(m.DB)
+    monkeypatch.setattr(r,'prepare_rule_sets',lambda *args:(_ for _ in ()).throw(ValueError('download failed')))
+    response=c.post('/routing/rules/save',data={'token':t,'name':'Geo','target':'direct','geoip':'cn'})
+    assert 'download failed' in response.text and r.load(m.DB)==old

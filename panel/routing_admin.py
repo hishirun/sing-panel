@@ -20,15 +20,16 @@ def install(app,m):
             values={'name':'','target':'direct','network':'','node_ids':[],'match_all':False}
             if row:
                 values.update(row)
-                for k,v in row['match'].items():values[k]=','.join(str(x) for x in v) if isinstance(v,list) else v
+                for k,v in row['match'].items():values[k]=v if k in ('geoip','geosite') else ','.join(str(x) for x in v) if isinstance(v,list) else v
                 if row['match'].get('port_range'):values['port']=','.join(filter(None,[values.get('port',''),','.join(row['match']['port_range'])]))
                 values['match_all']=not row['match'] and not row.get('node_ids')
-        return m.render(request,'routing_rule.html',row=row,values=values,targets={'direct':'服务器直连','reject':'拦截',**{o['id']:o['name'] for o in data['outbounds'] if o['enabled']}},nodes=records(m.DB,'nodes'),error=error)
+        return m.render(request,'routing_rule.html',row=row,values=values,geo_catalog=r.GEO_CATALOG,targets={'direct':'服务器直连','reject':'拦截',**{o['id']:o['name'] for o in data['outbounds'] if o['enabled']}},nodes=records(m.DB,'nodes'),error=error)
     def apply_change(change):
         with m.runtime.lock:
             old=r.load(m.DB);new=copy.deepcopy(old)
             change(new)
             document=r.compile_into(config(records(m.DB,'nodes'),records(m.DB,'users'),records(m.DB,'memberships'),m.STATS_PORT),new)
+            r.prepare_rule_sets(document,m.DIRECTORY,m.BINARY)
             m.check_document(document)
             r.write(m.DB,new)
             try:m.runtime.apply()
@@ -121,7 +122,7 @@ def install(app,m):
                     data['rules'].append(row)
             apply_change(change);log('保存分流规则',row['name']);return RedirectResponse('/routing',303)
         except (ValueError,TypeError) as e:
-            values=dict(raw);values['node_ids']=raw.getlist('node_ids');return rule_form(request,old,values,str(e))
+            values=dict(raw);values['node_ids']=raw.getlist('node_ids');values['geoip']=raw.getlist('geoip');values['geosite']=raw.getlist('geosite');return rule_form(request,old,values,str(e))
 
     @app.post('/routing/rules/{identity}/{action}')
     async def rule_action(request:Request,identity:str,action:str):

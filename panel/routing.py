@@ -1,5 +1,7 @@
 """Server egress routing. Upstream credentials are admin-only, never subscriptions."""
 import base64,copy,ipaddress,json,re,uuid
+from pathlib import Path
+GEO_CATALOG=json.loads(Path(__file__).with_name("geo_catalog.json").read_text())
 from urllib.parse import urlsplit,parse_qs,unquote
 from .core import connect
 KEY='server_routing'
@@ -206,6 +208,11 @@ def rule_input(raw,nodes,outbounds):
         elif items:
             if field=='protocol' and not set(items)<={'http','tls','quic','dns','bittorrent','ssh'}:raise ValueError('嗅探协议无效')
             match[field]=items
+    for kind in ('geoip','geosite'):
+        selected=raw.getlist(kind) if hasattr(raw,'getlist') else raw.get(kind,[])
+        if isinstance(selected,str):selected=[selected] if selected else []
+        if len(selected)>64 or not set(selected)<=set(GEO_CATALOG[kind]):raise ValueError('请选择有效的 '+kind+' 规则，最多 64 项')
+        if selected:match[kind]=list(dict.fromkeys(selected))
     network=text(raw,'network')
     if network not in ('','tcp','udp'):raise ValueError('网络类型无效')
     if network:match['network']=network
@@ -223,7 +230,7 @@ def compile_into(document,settings):
     ids={o['id'] for o in outs}
     if settings['final'] not in ids|{'direct'}:raise ValueError('默认出口不可用')
     document['outbounds'].extend({**copy.deepcopy(o['settings']),'tag':'up-'+o['id']} for o in outs)
-    rules=[]
+    rules=[];sets={}
     if settings.get('sniff'):rules.append({'action':'sniff','timeout':'300ms'})
     for rule in settings['rules']:
         if not rule['enabled']:continue
@@ -232,9 +239,57 @@ def compile_into(document,settings):
             tags=[i['tag'] for i in document['inbounds'] if i['tag'].split(':',1)[0] in rule['node_ids']]
             if not tags:continue
             match['inbound']=tags
+        if match.get('protocol') and not settings.get('sniff'):raise ValueError('使用协议条件时请开启协议嗅探')
+        geo=[]
+        for kind in ('geosite','geoip'):
+            selected=match.pop(kind,[])
+            if selected:
+                tags=[]
+                for value in selected:
+                    if value not in GEO_CATALOG[kind]:raise ValueError('无效规则集：'+kind+':'+value)
+                    tag=kind+'-'+value;tags.append(tag)
+                    sets[tag]={'type':'remote','tag':tag,'format':'binary','url':'https://raw.githubusercontent.com/SagerNet/sing-'+kind+'/rule-set/'+tag+'.srs','http_client':{'detour':'direct'},'update_interval':'24h'}
+                geo.append({'rule_set':tags})
+        if geo:
+            parts=([match] if match else [])+geo
+            match=parts[0] if len(parts)==1 else {'type':'logical','mode':'and','rules':parts}
         target=rule['target']
         if target not in ids|{'direct','reject'}:raise ValueError('规则引用了不可用出口')
         if match.get('protocol') and not settings.get('sniff'):raise ValueError('使用协议条件时请开启协议嗅探')
         rules.append({**match,'action':'reject'} if target=='reject' else {**match,'action':'route','outbound':'direct' if target=='direct' else 'up-'+target})
     document['route']={'rules':rules,'final':'direct' if settings['final']=='direct' else 'up-'+settings['final']}
+    if sets:
+        document['route']['rule_set']=list(sets.values())
+        document.setdefault('experimental',{}).setdefault('cache_file',{})['enabled']=True
+    return document
+
+def prepare_rule_sets(document,directory,binary):
+    """Seed remote rules before applying; a failed download never changes routing."""
+    import os,subprocess,tempfile
+    from urllib.request import urlopen
+    set_rule_paths(document,directory)
+    directory=Path(directory)/'rule-sets';directory.mkdir(mode=0o700,exist_ok=True)
+    for entry in document.get('route',{}).get('rule_set',[]):
+        destination=directory/(entry['tag']+'.srs')
+        entry['initial_path']=str(destination)
+        if destination.exists():continue
+        temporary=None
+        try:
+            with urlopen(entry['url'],timeout=15) as response:
+                data=response.read(32*1024*1024+1)
+            if len(data)>32*1024*1024:raise ValueError('规则集文件过大')
+            with tempfile.NamedTemporaryFile(dir=directory,delete=False) as f:
+                temporary=Path(f.name);f.write(data)
+            result=subprocess.run([binary,'rule-set','decompile',str(temporary),'-o',os.devnull],capture_output=True,timeout=15)
+            if result.returncode:raise ValueError('规则集格式校验失败')
+            temporary.replace(destination)
+        except Exception as exc:raise ValueError('无法加载规则集 '+entry['tag']+'，设置未保存，请稍后重试') from exc
+        finally:
+            if temporary and temporary.exists():temporary.unlink()
+
+def set_rule_paths(document,directory):
+    entries=document.get('route',{}).get('rule_set',[])
+    if entries:
+        document['experimental']['cache_file']['path']=str(Path(directory)/'routing-cache.db')
+        for entry in entries:entry['initial_path']=str(Path(directory)/'rule-sets'/(entry['tag']+'.srs'))
     return document

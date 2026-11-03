@@ -32,3 +32,9 @@ SOCKS5（含认证）、HTTP/HTTPS、Shadowsocks/SS2022、VMess、VLESS（TLS/Re
 真实核心测试覆盖带认证 SOCKS5、SS AEAD、SS2022 上游的路由命中、默认直连、指定默认出口和拦截；包括控制 API 的出口延迟测试。另覆盖 URI 导入、所有协议配置 check、顺序调整、引用保护、CSRF/登录保护、凭据不泄露、保存失败回滚和来源节点消失的处理。
 
 上线前备份 /opt/sing-panel/backups/before-routing-20261103.tar.gz 与 before-routing-20261103.db。上线不预设真实上游或业务规则。
+
+## GeoIP / Geosite
+
+规则编辑页提供 SagerNet 官方规则集目录，可搜索并多选国家、地区或域名分类。当前目录快照包含 238 个 GeoIP、1,995 个 Geosite 项。每一分类内为 OR，不同分类与其他条件之间为 AND；内网使用独立的“仅内网 IP”条件。
+
+使用现代 sing-box binary `rule_set`，不依赖已移除的 geoip/geosite 核心字段。首次保存会从官方 GitHub 下载并通过实际核心校验 SRS，再应用设置；下载失败保留旧配置。初始文件保存在数据目录 `rule-sets/`，核心缓存位于 `routing-cache.db`，通过直连每 24 小时自动更新。已有缓存可用于后续离线启动。管理端的规则目录为随项目发布的快照，规则内容由核心自动更新。
