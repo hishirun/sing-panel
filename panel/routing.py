@@ -248,7 +248,7 @@ def compile_into(document,settings):
                 for value in selected:
                     if value not in GEO_CATALOG[kind]:raise ValueError('无效规则集：'+kind+':'+value)
                     tag=kind+'-'+value;tags.append(tag)
-                    sets[tag]={'type':'remote','tag':tag,'format':'binary','url':'https://raw.githubusercontent.com/SagerNet/sing-'+kind+'/rule-set/'+tag+'.srs','http_client':{'detour':'direct'},'update_interval':'24h'}
+                    sets[tag]={'type':'remote','tag':tag,'format':'binary','url':'https://raw.githubusercontent.com/SagerNet/sing-'+kind+'/rule-set/'+tag+'.srs','http_client':{'version':1},'update_interval':'24h'}
                 geo.append({'rule_set':tags})
         if geo:
             parts=([match] if match else [])+geo

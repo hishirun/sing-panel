@@ -179,7 +179,7 @@ def test_geo_catalog_multiselect_logic_and_core(tmp_path):
     assert compiled['type']=='logical' and compiled['mode']=='and'
     assert compiled['rules']==[{'port':[443]},{'rule_set':['geosite-google','geosite-github']},{'rule_set':['geoip-cn','geoip-us']}]
     assert len(document['route']['rule_set'])==4
-    assert all(x['http_client']=={'detour':'direct'} for x in document['route']['rule_set'])
+    assert all(x['http_client']=={'version':1} for x in document['route']['rule_set'])
     with pytest.raises(ValueError):r.rule_input({**raw,'geoip':['../../secret']},[],[])
     if BINARY:
         # Real core schema check uses deterministic local seed files, no network.
@@ -199,3 +199,35 @@ def test_geo_form_choices_and_failed_download_keeps_settings(routing_client,monk
     monkeypatch.setattr(r,'prepare_rule_sets',lambda *args:(_ for _ in ()).throw(ValueError('download failed')))
     response=c.post('/routing/rules/save',data={'token':t,'name':'Geo','target':'direct','geoip':'cn'})
     assert 'download failed' in response.text and r.load(m.DB)==old
+
+def test_geo_http_client_downloads_without_direct_detour(tmp_path):
+    if not BINARY:pytest.skip('requires core')
+    from http.server import BaseHTTPRequestHandler
+    import copy
+    source=tmp_path/'source.json';source.write_text('{"version":3,"rules":[{"domain_suffix":["openai.com"]}]}')
+    binary=tmp_path/'rules.srs'
+    subprocess.run([BINARY,'rule-set','compile',str(source),'-o',str(binary)],check=True,capture_output=True)
+    class RulesHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body=binary.read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),RulesHandler)
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    settings=copy.deepcopy(r.DEFAULT);settings['rules']=[{'enabled':True,'target':'direct','match':{'geosite':['category-ai-!cn']},'node_ids':[]}]
+    document=r.compile_into({'inbounds':[],'outbounds':[{'type':'direct','tag':'direct'}]},settings)
+    document['route']['rule_set'][0]['url']=f'http://127.0.0.1:{server.server_port}/rules.srs'
+    document['experimental']['cache_file']['path']=str(tmp_path/'cache.db')
+    path=tmp_path/'config.json';path.write_text(json.dumps(document))
+    with (tmp_path/'core.log').open('w+') as output:
+        process=subprocess.Popen([BINARY,'run','-c',str(path)],stdout=output,stderr=output)
+        try:
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                output.seek(0);logs=output.read()
+                if 'sing-box started' in logs:break
+                if process.poll() is not None:break
+                time.sleep(.05)
+            assert 'sing-box started' in logs,logs
+            assert 'empty direct' not in logs
+        finally:
+            process.terminate();process.wait(timeout=5);server.shutdown();server.server_close()
