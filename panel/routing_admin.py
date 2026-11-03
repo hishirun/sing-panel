@@ -10,6 +10,8 @@ from .management import audit
 def install(app,m):
     def page(request,error='',notice=''):
         data=r.load(m.DB)
+        from .latency import cached
+        for out in data['outbounds']:out['latency']=cached(m.DB,out)
         labels={'direct':'服务器直连','reject':'拦截',**{o['id']:o['name'] for o in data['outbounds']}}
         return m.render(request,'routing.html',routing=data,targets=labels,types=r.TYPES,nodes=records(m.DB,'nodes'),error=error,notice=notice)
     def outbound_form(request,row=None,values=None,error=''):
