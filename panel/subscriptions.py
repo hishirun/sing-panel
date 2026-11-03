@@ -1,6 +1,6 @@
 """User-scoped sing-box subscriptions. Never exposes server private keys."""
 from .core import reason
-from .options import options, snell_options, reality_tls
+from .options import options, snell_options, reality_tls, certificate_tls, hysteria_options
 
 def outbounds(user,nodes,memberships,host):
     if reason(user):
@@ -11,7 +11,7 @@ def outbounds(user,nodes,memberships,host):
         if not n['enabled'] or n['id'] not in allowed:
             continue
         o=options(n)
-        out={'tag':n['name'],'server':host,'server_port':n['port']}
+        out={'tag':n['name'],'server':o['connect_host'] or host,'server_port':n['port']}
         if n['protocol'] in ('snell5','snell6'):
             # sing-box's v4 outbound speaks the v5 TCP wire protocol.
             out.update(type='snell',version=4 if n['protocol']=='snell5' else 6,
@@ -22,6 +22,10 @@ def outbounds(user,nodes,memberships,host):
                 out['psk']=user['secret']
                 out['server_port']=allowed[n['id']]['port']
                 del out['userkey']
+        elif n['protocol'] in ('anytls','hysteria2'):
+            out.update(type=n['protocol'],password=user['secret'],tls=certificate_tls(n,client=True))
+            if n['protocol']=='hysteria2':out.update(hysteria_options(n,client=True))
+            else:out.update(idle_session_check_interval=f"{o['any_idle_check']}s",idle_session_timeout=f"{o['any_idle_timeout']}s",min_idle_session=o['any_min_idle'])
         else:
             out.update(type='vless',uuid=user['uuid'],flow=o['flow'],tls=reality_tls(n,client=True))
         result.append(out)
@@ -33,6 +37,16 @@ def native_subscription(outs,format):
     from urllib.parse import quote
     lines=[]
     for o in outs:
+        if o['type'] in ('anytls','hysteria2') and format=='shadowrocket.txt':
+            from urllib.parse import urlencode
+            host=o['server'];host='['+host+']' if ':' in host else host
+            params={'sni':o['tls']['server_name']}
+            if o['tls'].get('alpn'):params['alpn']=','.join(o['tls']['alpn'])
+            if o.get('obfs'):
+                if o['obfs']['type']=='gecko':continue
+                params.update(obfs='salamander',**{'obfs-password':o['obfs']['password']})
+            lines.append(f"{o['type']}://{quote(o['password'],safe='')}@{host}:{o['server_port']}?{urlencode(params)}#{quote(o['tag'])}")
+            continue
         if o['type']=='vless' and format=='shadowrocket.txt':
             from urllib.parse import urlencode
             tls=o['tls']

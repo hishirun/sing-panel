@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import sqlite3
+import ssl
 import subprocess
 import time
 import tempfile
@@ -177,7 +178,11 @@ def new_node(request: Request, protocol: str='snell6'):
     authenticated(request)
     if protocol not in PROTOCOLS:
         raise HTTPException(422,'协议无效')
-    return editor(request,values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else ''})
+    values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else ''}
+    if protocol in ('hysteria2','anytls') and (DIRECTORY/'tls/fullchain.pem').exists():
+        from urllib.parse import urlsplit
+        values.update(certificate_path=str(DIRECTORY/'tls/fullchain.pem'),key_path=str(DIRECTORY/'tls/privkey.pem'),server_name=urlsplit(read_settings(DB)['public_url']).hostname or '')
+    return editor(request,values=values)
 
 @app.get('/nodes/{identity}/edit',response_class=HTMLResponse)
 def edit_node(request: Request,identity: str):
@@ -202,9 +207,18 @@ async def save_node(request,identity=None):
         protocol=node['protocol'] if node else str(raw.get('protocol','snell6'))
         if protocol not in PROTOCOLS:raise ValueError('协议无效')
         settings=NodeOptions.model_validate(raw)
-        mode='shared' if protocol=='reality' else str(raw.get('mode','compat'))
+        mode='shared' if protocol in ('reality','hysteria2','anytls') else str(raw.get('mode','compat'))
         if mode not in ('shared','compat'):raise ValueError('用户模式无效')
-        sni=domain(str(raw.get('server_name',''))) if protocol=='reality' else ''
+        sni=domain(str(raw.get('server_name',''))) if protocol in ('reality','hysteria2','anytls') else ''
+        if protocol in ('hysteria2','anytls'):
+            if not settings.certificate_path or not settings.key_path:raise ValueError('请填写证书链与私钥文件路径')
+            certificate_check=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            certificate_check.load_cert_chain(settings.certificate_path,settings.key_path)
+            for args in [('-checkend','0'),('-checkhost',sni)]:
+                result=subprocess.run(['openssl','x509','-in',settings.certificate_path,'-noout',*args],capture_output=True,text=True,timeout=10)
+                if result.returncode:raise ValueError('证书已过期或未覆盖该 SNI 域名')
+            if protocol=='hysteria2' and settings.tls_min_version!='1.3':raise ValueError('Hysteria2 使用 TLS 1.3')
+            if protocol=='hysteria2' and settings.tls_alpn and settings.tls_alpn!='h3':raise ValueError('Hysteria2 ALPN 请留空或填写 h3')
         if raw.get('intent')=='probe':
             if protocol!='reality':raise ValueError('只有 Reality 节点需要 TLS 握手检测')
             result=probe_tls(settings.handshake_host or sni,settings.handshake_port,sni)
@@ -261,6 +275,8 @@ async def save_node(request,identity=None):
                 db.execute('INSERT INTO nodes(id,'+','.join(fields)+') VALUES('+','.join('?' for _ in range(len(fields)+1))+')',
                            (candidate['id'],)+tuple(candidate[k] for k in fields))
         return RedirectResponse('/nodes',status_code=303)
+    except (OSError, ssl.SSLError) as e:
+        return editor(request,node,raw,error='证书不可读取或证书与私钥不匹配：'+str(e),status=422)
     except ValidationError as e:
         error='；'.join('.'.join(map(str,x['loc']))+': '+x['msg'] for x in e.errors())
     except (ValueError,subprocess.SubprocessError) as e:

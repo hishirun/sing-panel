@@ -77,6 +77,14 @@ def share_context(path,user,host,base):
         nodes.append({**n,'port':allowed[n['id']]['port'] if n['mode']=='compat' else n['port'],
                       'outbound':out,'uri':uri,'surge':surge,'config':config})
     used=user['upload']+user['download']
+    policy=json.loads(user.get('policy','{}'))
+    reset_at=policy.get('next_reset',0) if policy.get('reset_mode','none')!='none' else 0
+    can_renew=policy.get('renew_mode','none')!='none' and (not policy.get('renew_limit') or policy.get('renew_count',0)<policy['renew_limit'])
+    candidates=[t for t in (reset_at,user['expires'] if can_renew else 0) if t]
+    reset_at=min(candidates) if candidates else 0
+    reset_local=datetime.fromtimestamp(reset_at,timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M') if reset_at else ''
+    reset_hours=max(0,int((reset_at-time.time()+3599)//3600)) if reset_at else 0
+    reset_eta=(f'{reset_hours//24} 天 {reset_hours%24} 小时后' if reset_hours>=24 else f'{reset_hours} 小时后') if reset_hours else '即将重置'
     pending_days=json.loads(user.get('policy','{}')).get('first_use_days',0) if not user.get('activated_at') else 0
     with connect(path) as db:
         daily=[dict(r) for r in db.execute('SELECT day,upload,download,upload+download total FROM daily WHERE user_id=? ORDER BY day DESC LIMIT 30',(user['id'],))]
@@ -107,7 +115,7 @@ def share_context(path,user,host,base):
                                'average':round(sum(valid)/len(valid),1) if valid else None,
                                'online':round(100*len(valid)/len(rows)) if rows else None,
                                'stale':bool(rows and time.time()-rows[-1]['timestamp']>180)})
-    return dict(user=user,nodes=nodes,host=host,pending_days=pending_days,used=used,remaining=max(0,user['quota']-used),
+    return dict(reset_eta=reset_eta,reset_at=reset_at,reset_local=reset_local,reset_hours=reset_hours,reset_enabled=policy.get('reset_mode','none')!='none' or can_renew,user=user,nodes=nodes,host=host,pending_days=pending_days,used=used,remaining=max(0,user['quota']-used),
                 percent=min(100,round(used/user['quota']*100,1)) if user['quota'] else 0,
                 expires=datetime.fromtimestamp(user['expires'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if user['expires'] else (f'首次使用后 {pending_days} 天' if pending_days else '长期有效'),
                 days=max(0,int((user['expires']-time.time()+86399)//86400)) if user['expires'] else None,

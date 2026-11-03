@@ -5,9 +5,9 @@ import secrets
 import socket
 import time
 from pathlib import Path
-from .options import listen_options, snell_options, reality_tls, options
+from .options import listen_options, snell_options, reality_tls, options, certificate_tls, hysteria_options
 
-PROTOCOLS = ('snell5', 'snell6', 'reality')
+PROTOCOLS = ('snell5', 'snell6', 'reality', 'hysteria2', 'anytls')
 
 def connect(path):
     db = sqlite3.connect(path, timeout=20)
@@ -97,7 +97,13 @@ def config(nodes, users, memberships, stats_port=19090):
                     **listen_options(n),**snell_options(n)})
             continue
         i = {'tag': n['id'], 'listen_port': n['port'], **listen_options(n)}
-        if n['protocol'] in ('snell5', 'snell6'):
+        if n['protocol'] in ('hysteria2','anytls'):
+            i.update(type=n['protocol'],users=[{'name':n['id']+':'+u['id'],'password':u['secret']} for u in allowed],tls=certificate_tls(n))
+            if n['protocol']=='hysteria2':
+                i={k:v for k,v in i.items() if not k.startswith('tcp_') and k!='disable_tcp_keep_alive'}
+                i.update(hysteria_options(n))
+            elif options(n)['any_padding'].strip():i['padding_scheme']=options(n)['any_padding'].strip().splitlines()
+        elif n['protocol'] in ('snell5', 'snell6'):
             i.update(type='snell', version=int(n['protocol'][-1]), psk=n['secret'],
                      users=[{'name': n['id']+':'+u['id'], 'userkey': u['secret']} for u in allowed], **snell_options(n))
         else:

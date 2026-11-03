@@ -7,7 +7,7 @@ import socket
 import ssl
 import time
 from typing import Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 PRESETS = ('www.cloudflare.com', 'www.microsoft.com', 'www.apple.com')
 FINGERPRINTS = ('chrome','firefox','edge','safari','ios','android','360','qq','random','randomized')
@@ -38,6 +38,66 @@ class NodeOptions(BaseModel):
     flow: Literal['xtls-rprx-vision',''] = 'xtls-rprx-vision'
     short_ids: str = ''
     alpn: str = ''
+
+    connect_host: str = ''
+    certificate_path: str = ''
+    key_path: str = ''
+    tls_min_version: Literal['1.2','1.3'] = '1.3'
+    tls_alpn: str = ''
+    hy_up_mbps: int = Field(0,ge=0,le=100000)
+    hy_down_mbps: int = Field(0,ge=0,le=100000)
+    hy_client_up_mbps: int = Field(0,ge=0,le=100000)
+    hy_client_down_mbps: int = Field(0,ge=0,le=100000)
+    hy_ignore_client_bandwidth: bool = False
+    hy_bbr_profile: Literal['standard','conservative','aggressive'] = 'standard'
+    hy_obfs: Literal['none','salamander','gecko'] = 'none'
+    hy_obfs_password: str = Field('',max_length=255)
+    hy_gecko_min: int = Field(512,ge=512,le=1500)
+    hy_gecko_max: int = Field(1200,ge=512,le=1500)
+    hy_masquerade: str = Field('',max_length=2048)
+    hy_initial_packet_size: int = Field(1200,ge=1200,le=1452)
+    hy_disable_mtu_discovery: bool = False
+    any_padding: str = Field('',max_length=4096)
+    any_idle_check: int = Field(30,ge=1,le=3600)
+    any_idle_timeout: int = Field(30,ge=1,le=3600)
+    any_min_idle: int = Field(0,ge=0,le=128)
+
+    @field_validator('connect_host')
+    @classmethod
+    def valid_connect_host(cls,v):
+        if not v.strip():return ''
+        try:return str(ipaddress.ip_address(v.strip()))
+        except ValueError:return domain(v)
+
+    @field_validator('certificate_path','key_path')
+    @classmethod
+    def valid_tls_path(cls,v):
+        v=v.strip()
+        if v and (not v.startswith('/') or any(x in v for x in ('\n','\r','\x00'))):raise ValueError('证书路径须为绝对路径')
+        return v
+
+    @field_validator('tls_alpn')
+    @classmethod
+    def valid_tls_alpn(cls,v):
+        values=list(dict.fromkeys(x.strip() for x in v.split(',') if x.strip()))
+        if any(not re.fullmatch(r'[A-Za-z0-9./_-]{1,32}',x) for x in values):raise ValueError('ALPN 格式无效')
+        return ','.join(values)
+
+    @field_validator('hy_masquerade')
+    @classmethod
+    def valid_masquerade(cls,v):
+        from urllib.parse import urlsplit
+        if not v.strip():return ''
+        u=urlsplit(v.strip())
+        if u.scheme not in ('http','https') or not u.hostname or u.username or u.password or u.fragment:raise ValueError('伪装地址须为 http(s) URL')
+        return v.strip()
+
+    @model_validator(mode='after')
+    def valid_tls_options(self):
+        if self.hy_gecko_min>self.hy_gecko_max:raise ValueError('Gecko 最小包长度不能大于最大值')
+        if self.hy_obfs!='none' and len(self.hy_obfs_password)<8:raise ValueError('QUIC 混淆密码至少 8 字符')
+        if self.hy_ignore_client_bandwidth and (self.hy_up_mbps or self.hy_down_mbps):raise ValueError('忽略客户端带宽时，服务端带宽上限请填 0')
+        return self
 
     @field_validator('listen')
     @classmethod
@@ -136,3 +196,28 @@ def probe_tls(host,port,sni):
                 return f"{tls.version()} · ALPN {tls.selected_alpn_protocol() or '未协商'} · {round((time.monotonic()-started)*1000)} ms；证书与 SNI 校验通过"
     except (OSError,ValueError) as e:
         raise ValueError(f'握手检测失败：{e}')
+
+
+def certificate_tls(node,client=False):
+    o=options(node)
+    tls={'enabled':True,'server_name':node['server_name'],'min_version':o['tls_min_version']}
+    alpn=o['tls_alpn'] or ('h3' if node['protocol']=='hysteria2' else '')
+    if alpn:tls['alpn']=alpn.split(',')
+    if not client:tls.update(certificate_path=o['certificate_path'],key_path=o['key_path'])
+    return tls
+
+
+def hysteria_options(node,client=False):
+    o=options(node)
+    out={'bbr_profile':o['hy_bbr_profile']}
+    for field in ('up_mbps','down_mbps'):
+        value=o[('hy_client_' if client else 'hy_')+field]
+        if value:out[field]=value
+    if not client:
+        out['ignore_client_bandwidth']=o['hy_ignore_client_bandwidth']
+        if o['hy_masquerade']:out['masquerade']=o['hy_masquerade']
+    out.update(initial_packet_size=o['hy_initial_packet_size'],disable_path_mtu_discovery=o['hy_disable_mtu_discovery'])
+    if o['hy_obfs']!='none':
+        out['obfs']={'type':o['hy_obfs'],'password':o['hy_obfs_password']}
+        if o['hy_obfs']=='gecko':out['obfs'].update(min_packet_size=o['hy_gecko_min'],max_packet_size=o['hy_gecko_max'])
+    return out
