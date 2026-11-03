@@ -89,3 +89,37 @@ def test_periodic_reset_keeps_sampling_baseline_and_phase(client):
     assert records(m.DB,'users')[0]['upload']==10
     maintain(m.DB,now=100+86400+20)
     assert records(m.DB,'users')[0]['upload']==10
+
+def test_daily_quota_plan_resets_at_utc_midnight_without_renewing(client):
+    c,m=client
+    t=csrf(c)
+    result=c.post('/users/create',data={'token':t,'name':'Daily','quota_gib':'10','reset_mode':'daily','expiry':'2027-01-01'})
+    assert result.status_code==200
+    u=records(m.DB,'users')[0]
+    now=int(datetime(2026,11,3,15,30,tzinfo=timezone.utc).timestamp())
+    midnight=int(datetime(2026,11,4,tzinfo=timezone.utc).timestamp())
+    with connect(m.DB) as db:db.execute('UPDATE users SET upload=quota WHERE id=?',(u['id'],))
+    maintain(m.DB,now=now)
+    current=records(m.DB,'users')[0]
+    assert current['upload']==10*1024**3
+    assert json.loads(current['policy'])['next_reset']==midnight
+    maintain(m.DB,now=midnight)
+    current=records(m.DB,'users')[0]
+    assert current['upload']==current['download']==0
+    assert current['expires']==u['expires']
+    assert json.loads(current['policy'])['next_reset']==midnight+86400
+    maintain(m.DB,now=midnight+3*86400+1)
+    assert json.loads(records(m.DB,'users')[0]['policy'])['next_reset']==midnight+4*86400
+
+def test_periodic_quota_requires_positive_amount_and_weekday_is_saved(client):
+    c,m=client;t=csrf(c)
+    assert c.post('/users/create',data={'token':t,'name':'Bad','quota_gib':0,'reset_mode':'daily'}).status_code==422
+    assert c.post('/users/create',data={'token':t,'name':'Weekly','quota_gib':100,'reset_mode':'weekly','reset_weekday':3}).status_code==200
+    u=records(m.DB,'users')[0]
+    assert u['quota']==100*1024**3
+    assert json.loads(u['policy'])['reset_weekday']==3
+    p=c.get('/users/'+u['id']+'/edit')
+    assert '流量套餐' in p.text and 'name="reset_mode" value="weekly" checked' in p.text
+    t=csrf(c)
+    assert c.post('/users/save/'+u['id'],data={'token':t,'name':'Weekly','quota_gib':100,'reset_mode':'weekly','reset_weekday':3}).status_code==200
+    assert json.loads(records(m.DB,'users')[0]['policy'])['reset_weekday']==3

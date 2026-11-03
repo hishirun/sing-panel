@@ -38,7 +38,7 @@ def policy_input(raw,old=None):
     p=dict(old or {})
     for prefix in ('renew','reset'):
         mode=str(raw.get(prefix+'_mode','none'))
-        if mode not in ('none','days','weekly','monthly'):raise ValueError('周期模式无效')
+        if mode not in ('none','days','daily','weekly','monthly'):raise ValueError('周期模式无效')
         new={prefix+'_mode':mode,prefix+'_days':bounded(raw,prefix+'_days',30,1,36500),
              prefix+'_day':bounded(raw,prefix+'_day',1,1,31),prefix+'_weekday':bounded(raw,prefix+'_weekday',1,1,7)}
         if any(p.get(k)!=v for k,v in new.items()):
@@ -53,6 +53,7 @@ def next_boundary(now,mode,days=30,day=1,weekday=1):
     if mode=='days':return int(now+days*DAY)
     current=datetime.fromtimestamp(now,timezone.utc)
     midnight=current.replace(hour=0,minute=0,second=0,microsecond=0)
+    if mode=='daily':return int((midnight+timedelta(days=1)).timestamp())
     if mode=='weekly':
         delta=(weekday-1-current.weekday())%7
         target=midnight+timedelta(days=delta)

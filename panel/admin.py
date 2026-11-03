@@ -21,6 +21,7 @@ def install(app,m):
         quota,expires=m.validate_limits(float(raw.get('quota_gib',0)),str(raw.get('expiry','')))
         if not math.isfinite(float(raw.get('quota_gib',0))):raise ValueError('额度必须是有限数值')
         p=policy_input(raw,json.loads(old['policy']) if old else None)
+        if p['reset_mode']!='none' and quota<=0:raise ValueError('周期套餐请填写大于 0 的流量额度；不限量请选择一次性额度并填 0')
         if old and old['activated_at'] and p['first_use_days']!=json.loads(old['policy']).get('first_use_days',0):
             raise ValueError('已激活用户请直接调整到期日，不能重新设为首次使用激活')
         if p['first_use_days'] and not (old and old['activated_at']):expires=0
