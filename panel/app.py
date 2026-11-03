@@ -10,7 +10,7 @@ import time
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlencode, quote
 
@@ -74,7 +74,7 @@ async def headers(request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'inline-speculation-rules'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     return response
 
 def authenticated(request):
@@ -89,8 +89,9 @@ def csrf(request, token):
 
 def render(request, name, **context):
     request.session.setdefault('csrf', secrets.token_urlsafe(32))
+    settings=read_settings(DB)
     return templates.TemplateResponse(request=request, name=name,
-        context={'csrf': request.session['csrf'], 'branding':read_settings(DB), 'admin_path':read_settings(DB)['admin_path'], 'share_path':read_settings(DB)['share_path'], **context})
+        context={'csrf': request.session['csrf'], 'branding':settings, 'admin_path':settings['admin_path'], 'share_path':settings['share_path'], **context})
 
 @app.get('/login', response_class=HTMLResponse)
 def login_page(request: Request):
@@ -137,10 +138,24 @@ def dashboard(request: Request):
         u['expires_text'] = datetime.fromtimestamp(u['expires'], timezone.utc).strftime('%Y-%m-%d') if u['expires'] else ''
     with connect(DB) as db:
         daily = [dict(r) for r in db.execute('SELECT day,SUM(upload+download) total FROM daily GROUP BY day ORDER BY day DESC LIMIT 14')]
-    return render(request, 'dashboard.html', users=users, nodes=nodes, daily=daily,
+    totals={d['day']:d['total'] for d in daily}
+    today=datetime.now(timezone.utc).date()
+    daily=[{'day':str(today-timedelta(days=i)), 'total':totals.get(str(today-timedelta(days=i)),0)} for i in reversed(range(14))]
+    maximum=max((d['total'] for d in daily),default=0) or 1
+    for d in daily:d['height']=max(1,d['total']/maximum*100) if d['total'] else 0
+    from .machine import snapshot
+    machine=snapshot(DIRECTORY)
+    return render(request, 'dashboard.html', machine=machine, online=len(runtime.online), connections=len(runtime.connections), running=bool(runtime.process and runtime.process.poll() is None), users=users, nodes=nodes, daily=daily,
                   error=runtime.error, total=sum(u['upload']+u['download'] for u in users),
                   active=sum(not u['state'] for u in users), host=PUBLIC_HOST,
                   share_base=read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
+
+
+@app.get('/system/metrics')
+def machine_metrics(request:Request):
+    authenticated(request)
+    from .machine import snapshot
+    return {**snapshot(DIRECTORY),'online':len(runtime.online),'connections':len(runtime.connections),'running':bool(runtime.process and runtime.process.poll() is None)}
 
 def validate_limits(quota_gib, expiry):
     if not 0 <= quota_gib <= 1_000_000:
