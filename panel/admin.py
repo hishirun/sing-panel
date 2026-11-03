@@ -164,7 +164,12 @@ def install(app,m):
     def nodes_page(request:Request,q:str='',group:str=''):
         m.authenticated(request);nodes=records(m.DB,'nodes');members=records(m.DB,'memberships')
         groups=sorted({n['group_name'] for n in nodes if n['group_name']})
-        for n in nodes:n['members']=sum(x['node_id']==n['id'] for x in members)
+        from .routing import load
+        from .latency import node_exits
+        routing=load(m.DB)
+        for n in nodes:
+            n['members']=sum(x['node_id']==n['id'] for x in members)
+            n['exits']=node_exits(m.DB,n,routing)
         nodes=[n for n in nodes if (not q or q.casefold() in (n['name']+' '+n['comment']).casefold()) and (not group or n['group_name']==group)]
         return m.render(request,'nodes.html',nodes=nodes,groups=groups,q=q,group=group,host=m.PUBLIC_HOST,error=m.runtime.error)
 

@@ -93,10 +93,10 @@ def install(app,m):
             data=r.load(m.DB);entry=find(data['outbounds'],identity)
             if action=='test':
                 if not entry['enabled']:raise ValueError('请先启用出口')
-                try:
-                    result=m.runtime.control('/proxies/up-'+quote(identity,safe='')+'/delay?url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=3000')
-                    if 'delay' not in result:raise ValueError()
-                except Exception:raise ValueError('出口测试失败：请检查地址、凭据和服务器连通性')
+                from .latency import probe
+                from starlette.concurrency import run_in_threadpool
+                result=await run_in_threadpool(probe,m.DB,m.runtime,entry)
+                if result['delay'] is None:raise ValueError('出口不可达或测速超时')
                 return page(request,notice=entry['name']+' · '+str(result['delay'])+' ms')
             if action not in ('toggle','delete'):raise HTTPException(404)
             def change(data):
@@ -160,6 +160,15 @@ def install(app,m):
             def change(data):data.update(final=str(raw.get('final','direct')),sniff=r.truth(raw.get('sniff')))
             apply_change(change);log('修改默认出口','');return RedirectResponse('/routing',303)
         except ValueError as e:return page(request,error=str(e))
+
+    @app.post('/routing/latency/{identity}')
+    async def outbound_latency(request:Request,identity:str):
+        await form(request)
+        entry=find(r.load(m.DB)['outbounds'],identity)
+        if not entry['enabled']:raise HTTPException(422,'出口未启用')
+        from .latency import probe
+        from starlette.concurrency import run_in_threadpool
+        return await run_in_threadpool(probe,m.DB,m.runtime,entry)
 
     @app.get('/routing/preview')
     def preview(request:Request):
