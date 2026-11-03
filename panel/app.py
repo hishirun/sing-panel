@@ -396,11 +396,18 @@ async def settings_save(request: Request):
 
 @app.get('/s/{token}', response_class=HTMLResponse)
 def customer(request: Request, token: str, changed: bool=False, period: str="7d"):
+    from .client_profiles import detect_client
+    requested = request.query_params.get('format')
+    detected = detect_client(request.headers.get('user-agent', ''))
+    if requested or detected:
+        return subscription(request, token, requested or detected)
     user=subscription_user(token)
     context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
     from .traffic import traffic_view
     context['traffic']=traffic_view(DB,user['id'],context['nodes'],period)
-    return render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed)
+    response = render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed)
+    response.headers['Vary'] = 'User-Agent'
+    return response
 
 @app.get('/s/{token}/qr/{kind}')
 def customer_qr(request: Request, token: str, kind: str):
@@ -409,7 +416,7 @@ def customer_qr(request: Request, token: str, kind: str):
     if kind=='page':
         text=context['share_url']
     elif kind=='subscription':
-        text=context['share_url']+'/shadowrocket.txt'
+        text=context['share_url']+'/subscription'
     else:
         node=next((n for n in context['nodes'] if n['id']==kind),None)
         if not node or not node['uri']:raise HTTPException(404)
@@ -434,24 +441,47 @@ def customer_psk(request: Request, token: str, csrf_token: str=Form(...), psk: s
     return RedirectResponse('/s/'+token+'?changed=true',status_code=303)
 
 @app.get('/s/{token}/{format}')
-def subscription(token: str, format: str):
+def subscription(request: Request, token: str, format: str):
+    from .client_profiles import resolve_format, singbox_profile, mihomo_profile, ini_profile
+    from .subscriptions import native_subscription
+    import base64
     user=subscription_user(token)
+    try:
+        fmt=resolve_format(request.query_params.get('format') or format, request.headers.get('user-agent',''))
+    except ValueError as error:
+        raise HTTPException(400, str(error))
     if not PUBLIC_HOST:
         raise HTTPException(503,'尚未设置 PANEL_PUBLIC_HOST')
     outs=outbounds(user,records(DB,'nodes'),records(DB,'memberships'),PUBLIC_HOST)
+    settings=read_settings(DB)
+    base=settings['public_url'] or str(request.base_url).rstrip('/')
+    page_url=base+settings['share_path']+'/'+token
+    url=page_url+'/'+fmt
     info=f"upload={user['upload']}; download={user['download']}; total={user['quota']}; expire={user['expires']}"
-    headers={'Subscription-Userinfo':info}
-    if format=='sing-box.json':
-        headers['Content-Disposition']='attachment; filename="sing-box.json"'
-        return Response(json.dumps({'outbounds':outs},indent=2),media_type='application/json',headers=headers)
-    from .subscriptions import native_subscription
-    if format not in ('surge.conf','shadowrocket.txt'):
-        raise HTTPException(404)
-    body=native_subscription(outs,format)
-    if format=='shadowrocket.txt' and not reason(user) and user.get('external_cache'):
-        import base64
-        body=base64.b64encode((base64.b64decode(body).decode()+user['external_cache']+'\n').encode()).decode()
-    return Response(body,media_type='text/plain',headers=headers)
+    headers={'Subscription-Userinfo':info, 'Vary':'User-Agent',
+             'Profile-Update-Interval':'6', 'Profile-Web-Page-Url':page_url,
+             'Profile-Title':'base64:'+base64.b64encode((settings['brand']+' · '+user['name']).encode()).decode(),
+             'Content-Disposition':f'attachment; filename="{fmt}"',
+             'X-Subscription-Format':fmt}
+    media='text/plain'
+    try:
+        if fmt=='sing-box.json':
+            body,count=singbox_profile(outs,url,request.headers.get('user-agent',''))
+            media='application/json'
+        elif fmt=='clash.yaml':
+            body,count=mihomo_profile(outs,url)
+            media='application/yaml'
+        elif fmt in ('surge.conf','surfboard.conf'):
+            body,count=ini_profile(outs,fmt,url,user)
+        else:
+            body=native_subscription(outs,fmt)
+            count=sum(bool(line.strip()) for line in base64.b64decode(body).decode().splitlines())
+            if not reason(user) and user.get('external_cache'):
+                body=base64.b64encode((base64.b64decode(body).decode()+user['external_cache']+'\n').encode()).decode()
+        headers['X-Subscription-Node-Count']=str(count)
+    except ValueError as error:
+        raise HTTPException(422,str(error))
+    return Response(body,media_type=media,headers=headers)
 
 @app.get('/health')
 def health():

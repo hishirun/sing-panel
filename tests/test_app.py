@@ -157,7 +157,7 @@ def test_share_page_scoped_configs_qr_and_password(client):
     assert response.status_code==200
     assert 'new-secret-012345' in response.text
     assert m.records(m.DB,'users')[1]['secret']==bob['secret']
-    outs=c.get(url+'/sing-box.json').json()['outbounds']
+    outs=[o for o in c.get(url+'/sing-box.json').json()['outbounds'] if 'server' in o]
     assert len(outs)==2 and all(o['psk']=='new-secret-012345' for o in outs)
     assert c.post(url+'/psk',data={'csrf_token':page_token}).status_code==429
     c.post('/users/'+alice['id']+'/action',data={'token':csrf(c),'action':'toggle'})
