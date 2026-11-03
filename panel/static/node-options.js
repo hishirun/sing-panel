@@ -19,5 +19,5 @@
       const input=document.querySelector(`[name="${name}"]`);if(input) input.disabled=bbr.value==='true';
     }
   };
-  document.addEventListener('change',refresh);refresh();
+  window.panelListen(document,'change',refresh);refresh();
 })();

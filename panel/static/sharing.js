@@ -1,5 +1,5 @@
 'use strict';
-document.addEventListener('click', async event => {
+window.panelListen(document,'click', async event => {
   const button = event.target.closest('[data-copy]');
   if (!button) return;
   const text = button.dataset.copy;
@@ -23,11 +23,11 @@ document.addEventListener('click', async event => {
   button.textContent = copied ? '已复制 ✓' : '复制失败，请手动选择链接';
   setTimeout(() => { button.textContent = previous; }, 1800);
 });
-document.addEventListener('submit', event => {
+window.panelListen(document,'submit', event => {
   const message = event.target.dataset.confirm;
   if (message && !window.confirm(message)) event.preventDefault();
 });
-document.addEventListener('change', event => {
+window.panelListen(document,'change', event => {
   if (!event.target.matches('[data-select-all]')) return;
   event.target.closest('form').querySelectorAll('input[name="ids"]').forEach(box => { box.checked = event.target.checked; });
 });
@@ -54,29 +54,29 @@ document.addEventListener('change', event => {
     tip.style.left = `${left}px`;
     tip.style.top = `${Math.max(12,top)}px`;
   };
-  document.addEventListener('pointerover', event => {
+  window.panelListen(document,'pointerover', event => {
     const column = event.target.closest('[data-traffic-tip]');
     if (column) show(column);
   });
-  document.addEventListener('pointerout', event => {
+  window.panelListen(document,'pointerout', event => {
     const column = event.target.closest('[data-traffic-tip]');
     if (column && !column.contains(event.relatedTarget) && document.activeElement !== column) hide();
   });
-  document.addEventListener('focusin', event => {
+  window.panelListen(document,'focusin', event => {
     const column = event.target.closest('[data-traffic-tip]');
     if (column) show(column);
   });
-  document.addEventListener('focusout', event => {
+  window.panelListen(document,'focusout', event => {
     if (event.target.closest('[data-traffic-tip]')) hide();
   });
-  document.addEventListener('click', event => {
+  window.panelListen(document,'click', event => {
     const column = event.target.closest('[data-traffic-tip]');
     if (column) show(column);
   });
-  document.addEventListener('click',event => { if (!event.target.closest('[data-traffic-tip]')) hide(); });
-  document.addEventListener('keydown',event => { if (event.key === 'Escape') hide(); });
-  window.addEventListener('scroll',hide,true);
-  window.addEventListener('resize',hide);
+  window.panelListen(document,'click',event => { if (!event.target.closest('[data-traffic-tip]')) hide(); });
+  window.panelListen(document,'keydown',event => { if (event.key === 'Escape') hide(); });
+  window.panelListen(window,'scroll',hide,true);
+  window.panelListen(window,'resize',hide);
 })();
 
 (() => {
@@ -119,13 +119,13 @@ document.addEventListener('change', event => {
       }
     }
   }
-  document.addEventListener('click', event => {
+  window.panelListen(document,'click', event => {
     const link = event.target.closest('#traffic .period-switch a');
     if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     updateTraffic(link.href, true);
   });
-  window.addEventListener('popstate', () => {
+  window.panelListen(window,'popstate', () => {
     if (document.querySelector('#traffic')) updateTraffic(location.href, false);
   });
 })();

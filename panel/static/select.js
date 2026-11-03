@@ -37,10 +37,10 @@
     button.addEventListener('click',open);button.addEventListener('keydown',e=>{if(['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();open();}});
     popup.addEventListener('keydown',e=>{const items=[...list.querySelectorAll('button:not(:disabled)')];if(e.key==='Escape'){e.preventDefault();close();button.focus();}else if(e.key==='Tab')close();else if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();const current=items.indexOf(document.activeElement);cursor=e.key==='Home'?0:e.key==='End'?items.length-1:Math.max(0,Math.min(items.length-1,current+(e.key==='ArrowDown'?1:-1)));items[cursor]?.focus();}});
     search.addEventListener('input',render);select.addEventListener('change',sync);select.addEventListener('invalid',e=>{e.preventDefault();button.focus();button.setAttribute('aria-invalid','true');});select.addEventListener('change',()=>button.removeAttribute('aria-invalid'));
-    new MutationObserver(sync).observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','selected','hidden']});sync();
+    const observer=new MutationObserver(sync);window.panelScope.signal.addEventListener('abort',()=>observer.disconnect(),{once:true});observer.observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','selected','hidden']});sync();
   });
-  document.addEventListener('change',()=>queueMicrotask(()=>controls.forEach(fn=>fn())));
-  document.addEventListener('reset',()=>setTimeout(()=>controls.forEach(fn=>fn()),0));
-  document.addEventListener('pointerdown',e=>{if(opened&&!opened.popup.contains(e.target)&&!opened.button.contains(e.target))close();});
-  window.addEventListener('resize',close);window.addEventListener('scroll',e=>{if(opened&&!opened.popup.contains(e.target))close();},true);
+  window.panelListen(document,'change',()=>queueMicrotask(()=>controls.forEach(fn=>fn())));
+  window.panelListen(document,'reset',()=>setTimeout(()=>controls.forEach(fn=>fn()),0));
+  window.panelListen(document,'pointerdown',e=>{if(opened&&!opened.popup.contains(e.target)&&!opened.button.contains(e.target))close();});
+  window.panelListen(window,'resize',close);window.panelListen(window,'scroll',e=>{if(opened&&!opened.popup.contains(e.target))close();},true);
 })();
