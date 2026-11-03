@@ -1,5 +1,9 @@
 'use strict';
 (() => {
+  document.querySelectorAll('.admin-shell .table-wrap table').forEach(table=>{
+    const headings=[...table.querySelectorAll('thead th')].map(th=>th.textContent.trim());
+    table.querySelectorAll('tbody tr').forEach(row=>[...row.cells].forEach((cell,index)=>{if(cell.colSpan===1)cell.dataset.label=headings[index]||'';}));
+  });
   let opened=null,serial=0;
   const controls=[];
   const close=()=>{if(!opened)return;opened.popup.remove();opened.button.setAttribute('aria-expanded','false');opened=null;};
