@@ -27,7 +27,7 @@ window.panelListen(document,'click', async event => {
 (() => {
  const approved=new WeakSet(),pending=new WeakSet();
  window.panelListen(document,'submit',async event=>{
-  const form=event.target,message=form.dataset.confirm;if(!message)return;
+  const form=event.target,message=form.dataset.confirm;if(!message||(window.panelAsyncForms&&form.closest('#admin-content')&&document.getElementById('admin-content').dataset.admin!=null))return;
   if(approved.has(form)){approved.delete(form);return;}
   event.preventDefault();if(pending.has(form))return;pending.add(form);
   const submitter=event.submitter;
