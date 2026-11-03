@@ -438,3 +438,6 @@ def health():
 from .admin import install
 import sys
 install(app,sys.modules[__name__])
+
+from .routing_admin import install as install_routing
+install_routing(app,sys.modules[__name__])

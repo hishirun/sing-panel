@@ -120,7 +120,8 @@ def current_config(path, stats_port=19090):
         db.execute('BEGIN')
         rows = [[dict(r) for r in db.execute(f'SELECT * FROM {t} ORDER BY rowid')]
                 for t in ('nodes','users','memberships')]
-    return config(*rows,stats_port)
+    from .routing import load, compile_into
+    return compile_into(config(*rows,stats_port),load(path))
 
 def account(path, epoch, counters, day=None):
     """Atomic and idempotent; never reset the remote counter."""

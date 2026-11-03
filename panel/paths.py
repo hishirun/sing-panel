@@ -10,7 +10,7 @@ def validate_paths(admin, share):
         if allow_root and not value:return ''
         if not re.fullmatch(r'/[A-Za-z0-9_-]{3,64}',value):
             raise ValueError('路径须为 / 开头的 3–64 位字母、数字、下划线或短横线；管理路径 / 表示根目录')
-        if value in ('/static','/health','/login','/logout','/users','/nodes','/settings','/system'):
+        if value in ('/static','/health','/login','/logout','/users','/nodes','/settings','/system','/routing'):
             raise ValueError('此路径为系统保留路径')
         return value
     admin=check(admin,True);share='/s' if str(share).strip().rstrip('/')=='/s' else check(share)
