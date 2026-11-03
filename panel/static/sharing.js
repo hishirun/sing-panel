@@ -19,14 +19,22 @@ window.panelListen(document,'click', async event => {
       field.remove();
     }
   } catch (_) {}
+  window.panelToast(copied ? '链接已复制' : '复制失败，请手动选择链接', !copied);
   const previous = button.textContent;
   button.textContent = copied ? '已复制 ✓' : '复制失败，请手动选择链接';
   setTimeout(() => { button.textContent = previous; }, 1800);
 });
-window.panelListen(document,'submit', event => {
-  const message = event.target.dataset.confirm;
-  if (message && !window.confirm(message)) event.preventDefault();
-});
+(() => {
+ const approved=new WeakSet(),pending=new WeakSet();
+ window.panelListen(document,'submit',async event=>{
+  const form=event.target,message=form.dataset.confirm;if(!message)return;
+  if(approved.has(form)){approved.delete(form);return;}
+  event.preventDefault();if(pending.has(form))return;pending.add(form);
+  const submitter=event.submitter;
+  const accepted=await window.panelConfirm(message,submitter?.textContent.trim()||'确认操作');pending.delete(form);
+  if(accepted&&form.isConnected){approved.add(form);form.requestSubmit(submitter||undefined);}
+ });
+})();
 window.panelListen(document,'change', event => {
   if (!event.target.matches('[data-select-all]')) return;
   event.target.closest('form').querySelectorAll('input[name="ids"]').forEach(box => { box.checked = event.target.checked; });
