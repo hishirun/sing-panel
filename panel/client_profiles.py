@@ -217,7 +217,7 @@ def singbox_profile(outs, url, ua=''):
 
 
 def client_imports(share_url, name):
-    """Explicit format on the same endpoint avoids downloader UA ambiguity."""
+    """Every client imports the canonical share URL; HTTP UA selects the profile."""
     from urllib.parse import quote
     clients = [
         ('singbox', 'sing-box', 'singbox.png', 'sing-box://import-remote-profile?url='),
@@ -228,7 +228,7 @@ def client_imports(share_url, name):
     ]
     result = []
     for key, label, icon, prefix in clients:
-        url = share_url + '/subscription?format=' + key
+        url = share_url
         href = prefix + quote(url, safe='')
         if key == 'singbox':
             href += '#' + quote(name, safe='')

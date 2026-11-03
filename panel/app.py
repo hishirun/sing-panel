@@ -418,7 +418,7 @@ def customer_qr(request: Request, token: str, kind: str):
     if kind=='page':
         text=context['share_url']
     elif kind=='subscription':
-        text=context['share_url']+'/subscription'
+        text=context['share_url']
     else:
         node=next((n for n in context['nodes'] if n['id']==kind),None)
         if not node or not node['uri']:raise HTTPException(404)
@@ -458,7 +458,7 @@ def subscription(request: Request, token: str, format: str):
     settings=read_settings(DB)
     base=settings['public_url'] or str(request.base_url).rstrip('/')
     page_url=base+settings['share_path']+'/'+token
-    url=page_url+'/'+fmt
+    url=page_url
     info=f"upload={user['upload']}; download={user['download']}; total={user['quota']}; expire={user['expires']}"
     headers={'Subscription-Userinfo':info, 'Vary':'User-Agent',
              'Profile-Update-Interval':'6', 'Profile-Web-Page-Url':page_url,

@@ -94,7 +94,7 @@ def test_ua_routes_scope_headers_and_overrides(client):
     explicit=c.get(path+'?format=surge',headers={'user-agent':'mihomo/1.19'})
     assert explicit.headers['x-subscription-format']=='surge.conf'
     assert alice['secret'] in explicit.text
-    assert '/surge.conf interval=' in explicit.text
+    assert path+' interval=' in explicit.text
     assert c.get(path+'?format=nope').status_code==400
     c.post('/users/'+alice['id']+'/action',data={'token':csrf(c),'action':'toggle'})
     for fmt in ('sing-box.json','clash.yaml','surge.conf','surfboard.conf','shadowrocket.txt'):
@@ -114,6 +114,6 @@ def test_client_import_links():
             target=unquote(client['href'].removeprefix('shadowrocket://add/'))
         else:
             target=parse_qs(urlsplit(client['href']).query)['url'][0]
-        assert target==URL+'/subscription?format='+client['key']
+        assert target==URL
         assert (Path('panel/static/clients')/client['icon']).is_file()
     assert unquote(urlsplit(result[0]['href']).fragment)=='用户 & 测试'

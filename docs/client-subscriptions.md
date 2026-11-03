@@ -12,7 +12,7 @@ overrides detection; fixed-format links remain available.
   replacing the regex placeholder. Snell v6/userkey nodes are omitted. VLESS Reality,
   Hysteria2, AnyTLS and compatible Snell v5 (v4 wire format) are exported.
 - `surge.conf`: supplied rule-set template with populated proxies/groups and a
-  fixed-format managed update URL. Snell v5/v6, AnyTLS and Hysteria2 are included;
+  canonical share update URL. Snell v5/v6, AnyTLS and Hysteria2 are included;
   Reality and multi-user Snell are omitted. Use a current Surge version.
 - `surfboard.conf`: supplied domain-rule template, populated managed URL and groups.
   Snell v6, Reality, multi-user Snell and Gecko Hysteria2 are omitted. Compatible
@@ -43,7 +43,8 @@ References:
 - https://manual.nssurge.com/policies/overview.html
 - https://getsurfboard.com/docs/profile-format/proxy/external-proxy/snell/
 
-The share page presents one automatic subscription link and application import
-icons. Each icon uses the client's native URL scheme with an encoded, explicit
-format on `/subscription?format=...`, so import does not depend on the client's
-HTTP UA. The operating system must have that client installed/registered.
+The share URL is also the canonical subscription URL. Application import icons,
+managed-profile updates, the copy button and the QR code all use that exact URL.
+The receiving client's HTTP User-Agent selects the profile. Explicit format
+endpoints remain available for older subscriptions and nonstandard downloaders.
+The operating system must have the selected client installed/registered.

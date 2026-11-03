@@ -39,7 +39,7 @@ def test_changed_paths_redirects_and_old_entry_rejected(client):
     user=m.records(m.DB,'users')[0]
     prefix='/share-test/'+user['token']
     assert c.get(prefix).status_code==200
-    assert prefix+'/subscription' in c.get(prefix).text
+    assert prefix in c.get(prefix).text
     assert c.get(prefix+'/sing-box.json').status_code==200
     assert c.get(prefix+'/qr/subscription').status_code==200
     assert c.get('/s/'+user['token']).status_code==404
