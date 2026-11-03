@@ -79,6 +79,13 @@ def install(app,m):
             return RedirectResponse('/routing',303)
         except (ValueError,TypeError) as e:return outbound_form(request,old,dict(raw),str(e))
 
+    @app.get('/routing/outbounds/{identity}/{action}')
+    def outbound_action_link(request:Request,identity:str,action:str):
+        m.authenticated(request)
+        if action not in ('toggle','delete','test'):raise HTTPException(404)
+        find(r.load(m.DB)['outbounds'],identity)
+        return RedirectResponse('/routing',303)
+
     @app.post('/routing/outbounds/{identity}/{action}')
     async def outbound_action(request:Request,identity:str,action:str):
         await form(request)
@@ -123,6 +130,13 @@ def install(app,m):
             apply_change(change);log('保存分流规则',row['name']);return RedirectResponse('/routing',303)
         except (ValueError,TypeError) as e:
             values=dict(raw);values['node_ids']=raw.getlist('node_ids');values['geoip']=raw.getlist('geoip');values['geosite']=raw.getlist('geosite');return rule_form(request,old,values,str(e))
+
+    @app.get('/routing/rules/{identity}/{action}')
+    def rule_action_link(request:Request,identity:str,action:str):
+        m.authenticated(request)
+        if action not in ('toggle','delete','up','down'):raise HTTPException(404)
+        find(r.load(m.DB)['rules'],identity)
+        return RedirectResponse('/routing',303)
 
     @app.post('/routing/rules/{identity}/{action}')
     async def rule_action(request:Request,identity:str,action:str):

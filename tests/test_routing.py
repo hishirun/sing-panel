@@ -231,3 +231,15 @@ def test_geo_http_client_downloads_without_direct_detour(tmp_path):
             assert 'empty direct' not in logs
         finally:
             process.terminate();process.wait(timeout=5);server.shutdown();server.server_close()
+
+def test_action_links_redirect_without_mutation(routing_client):
+    c,m=routing_client;t=csrf(c)
+    c.post('/routing/outbounds/save',data={'token':t,'name':'Read-only link','type':'socks','server':'127.0.0.1','server_port':1080})
+    before=r.load(m.DB);identity=before['outbounds'][0]['id']
+    for action in ('toggle','delete','test'):
+        response=c.get('/routing/outbounds/'+identity+'/'+action,follow_redirects=False)
+        assert response.status_code==303
+        assert response.headers['location'].endswith('/routing')
+        assert r.load(m.DB)==before
+    c.cookies.clear()
+    assert c.get('/routing/outbounds/'+identity+'/toggle').status_code==401
