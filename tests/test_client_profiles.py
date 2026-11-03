@@ -102,3 +102,18 @@ def test_ua_routes_scope_headers_and_overrides(client):
         content=base64.b64decode(res.text).decode() if fmt=='shadowrocket.txt' else res.text
         assert alice['secret'] not in content
         assert res.headers['x-subscription-node-count']=='0'
+
+
+def test_client_import_links():
+    from urllib.parse import urlsplit, parse_qs, unquote
+    from panel.client_profiles import client_imports
+    result=client_imports(URL, '用户 & 测试')
+    assert len(result)==5
+    for client in result:
+        if client['key']=='shadowrocket':
+            target=unquote(client['href'].removeprefix('shadowrocket://add/'))
+        else:
+            target=parse_qs(urlsplit(client['href']).query)['url'][0]
+        assert target==URL+'/subscription?format='+client['key']
+        assert (Path('panel/static/clients')/client['icon']).is_file()
+    assert unquote(urlsplit(result[0]['href']).fragment)=='用户 & 测试'

@@ -405,6 +405,8 @@ def customer(request: Request, token: str, changed: bool=False, period: str="7d"
     context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
     from .traffic import traffic_view
     context['traffic']=traffic_view(DB,user['id'],context['nodes'],period)
+    from .client_profiles import client_imports
+    context['client_imports']=client_imports(context['share_url'],user['name'])
     response = render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed)
     response.headers['Vary'] = 'User-Agent'
     return response

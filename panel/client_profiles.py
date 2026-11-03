@@ -214,3 +214,23 @@ def singbox_profile(outs, url, ua=''):
         doc['outbounds'] = []
         doc['dns'] = {'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'}], 'final':'local'}
     return json.dumps(doc, ensure_ascii=False, indent=2), len(nodes)
+
+
+def client_imports(share_url, name):
+    """Explicit format on the same endpoint avoids downloader UA ambiguity."""
+    from urllib.parse import quote
+    clients = [
+        ('singbox', 'sing-box', 'singbox.png', 'sing-box://import-remote-profile?url='),
+        ('clash', 'Clash', 'clash.png', 'clash://install-config?url='),
+        ('surge', 'Surge', 'surge.jpg', 'surge:///install-config?url='),
+        ('surfboard', 'Surfboard', 'surfboard.png', 'surfboard:///install-config?url='),
+        ('shadowrocket', 'Shadowrocket', 'shadowrocket.jpg', 'shadowrocket://add/'),
+    ]
+    result = []
+    for key, label, icon, prefix in clients:
+        url = share_url + '/subscription?format=' + key
+        href = prefix + quote(url, safe='')
+        if key == 'singbox':
+            href += '#' + quote(name, safe='')
+        result.append(dict(key=key, label=label, icon=icon, href=href))
+    return result

@@ -42,3 +42,8 @@ References:
 - https://wiki.metacubex.one/config/proxies/snell/
 - https://manual.nssurge.com/policies/overview.html
 - https://getsurfboard.com/docs/profile-format/proxy/external-proxy/snell/
+
+The share page presents one automatic subscription link and application import
+icons. Each icon uses the client's native URL scheme with an encoded, explicit
+format on `/subscription?format=...`, so import does not depend on the client's
+HTTP UA. The operating system must have that client installed/registered.
