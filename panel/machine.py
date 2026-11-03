@@ -5,7 +5,7 @@ _lock=threading.Lock();_previous=None
 
 def snapshot(directory):
     global _previous
-    now=time.monotonic();cpu=None;memory=None;uptime=None;rx=None;tx=None
+    now=time.monotonic();cpu=None;memory=None;uptime=None;rx=None;tx=None;received=None;sent=None
     try:
         values=[int(v) for v in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
         total=sum(values);idle=values[3]+values[4]
@@ -22,4 +22,4 @@ def snapshot(directory):
         uptime=int(float(Path('/proc/uptime').read_text().split()[0]))
     except (OSError,ValueError,KeyError,IndexError):pass
     disk=shutil.disk_usage(directory)
-    return dict(cpu=cpu,memory=memory,uptime=uptime,rx=rx,tx=tx,cores=os.cpu_count(),load=[round(v,2) for v in os.getloadavg()],disk={'used':disk.used,'total':disk.total,'percent':round(disk.used/disk.total*100,1)})
+    return dict(rx_total=received,tx_total=sent,cpu=cpu,memory=memory,uptime=uptime,rx=rx,tx=tx,cores=os.cpu_count(),load=[round(v,2) for v in os.getloadavg()],disk={'used':disk.used,'total':disk.total,'percent':round(disk.used/disk.total*100,1)})

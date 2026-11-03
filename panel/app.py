@@ -136,16 +136,25 @@ def dashboard(request: Request):
         u['state'] = reason(u)
         u['node_ids'] = [m['node_id'] for m in memberships if m['user_id']==u['id']]
         u['expires_text'] = datetime.fromtimestamp(u['expires'], timezone.utc).strftime('%Y-%m-%d') if u['expires'] else ''
+    period=request.query_params.get('period','7d')
+    if period not in ('24h','7d','30d'):period='7d'
+    now=datetime.now(timezone.utc)
+    hourly=period=='24h';count=24 if hourly else 7 if period=='7d' else 30
+    dates=[now-timedelta(hours=i) if hourly else now-timedelta(days=i) for i in reversed(range(count))]
+    keys=[d.strftime('%Y-%m-%dT%H:00' if hourly else '%Y-%m-%d') for d in dates]
     with connect(DB) as db:
-        daily = [dict(r) for r in db.execute('SELECT day,SUM(upload+download) total FROM daily GROUP BY day ORDER BY day DESC LIMIT 14')]
-    totals={d['day']:d['total'] for d in daily}
-    today=datetime.now(timezone.utc).date()
-    daily=[{'day':str(today-timedelta(days=i)), 'total':totals.get(str(today-timedelta(days=i)),0)} for i in reversed(range(14))]
+        if hourly:
+            rows=db.execute('SELECT hour,SUM(upload+download) FROM node_hourly WHERE hour>=? AND hour<=? GROUP BY hour',(keys[0],keys[-1])).fetchall()
+        else:
+            rows=db.execute('SELECT day,SUM(upload+download) FROM daily WHERE day>=? AND day<=? GROUP BY day',(keys[0],keys[-1])).fetchall()
+        today_total=db.execute('SELECT COALESCE(SUM(upload+download),0) FROM daily WHERE day=?',(now.strftime('%Y-%m-%d'),)).fetchone()[0]
+    totals=dict(rows)
+    daily=[{'day':key,'label':key[11:16] if hourly else key[5:],'total':totals.get(key,0)} for key in keys]
     maximum=max((d['total'] for d in daily),default=0) or 1
     for d in daily:d['height']=max(1,d['total']/maximum*100) if d['total'] else 0
     from .machine import snapshot
     machine=snapshot(DIRECTORY)
-    return render(request, 'dashboard.html', machine=machine, online=len(runtime.online), connections=len(runtime.connections), running=bool(runtime.process and runtime.process.poll() is None), users=users, nodes=nodes, daily=daily,
+    return render(request, 'dashboard.html', period=period,today_total=today_total, machine=machine, online=len(runtime.online), connections=len(runtime.connections), running=bool(runtime.process and runtime.process.poll() is None), users=users, nodes=nodes, daily=daily,
                   error=runtime.error, total=sum(u['upload']+u['download'] for u in users),
                   active=sum(not u['state'] for u in users), host=PUBLIC_HOST,
                   share_base=read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
