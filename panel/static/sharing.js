@@ -134,6 +134,10 @@ window.panelListen(document,'change', event => {
     updateTraffic(link.href, true);
   });
   window.panelListen(window,'popstate', () => {
-    if (document.querySelector('#traffic')) updateTraffic(location.href, false);
+    const selected = document.querySelector('#traffic .period-switch .selected');
+    if (!selected) return;
+    const current = new URL(selected.href).searchParams.get('period') || '7d';
+    const requested = new URL(location.href).searchParams.get('period') || '7d';
+    if (current !== requested) updateTraffic(location.href, false);
   });
 })();
