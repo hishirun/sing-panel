@@ -10,7 +10,7 @@ import threading
 import time
 
 from .core import connect, records, config, reason
-from . import routing, user_routing
+from . import routing, user_routing, routing_rollout
 from .management import audit
 
 log = logging.getLogger(__name__)
@@ -25,7 +25,49 @@ class Publisher:
         self.last_batch = 0.0
         self.last_request = {}
         with connect(module.DB) as db:
+            routing_rollout.migrate(db)
             db.execute('CREATE TABLE IF NOT EXISTS routing_publish_journal (id INTEGER PRIMARY KEY, previous TEXT NOT NULL)')
+
+    def documents(self, servers, overrides):
+        """Validate each machine's own listeners and TLS material separately."""
+        result = {}
+        for server in sorted(servers):
+            if server == 'local':
+                nodes = [node for node in records(self.m.DB, 'nodes') if node.get('server_id', 'local') == 'local']
+                owned = {node['id'] for node in nodes}
+                members = [member for member in records(self.m.DB, 'memberships') if member['node_id'] in owned]
+                result[server] = user_routing.compose(config(nodes, records(self.m.DB, 'users'), members, self.m.STATS_PORT),
+                                                     self.m.DB, policy_overrides=overrides)
+            else:
+                from .fleet_config import configuration
+                # Removed machines have no remaining core to acknowledge.
+                with connect(self.m.DB) as db:
+                    if not db.execute('SELECT 1 FROM servers WHERE id=?', (server,)).fetchone():
+                        continue
+                result[server] = configuration(self.m.DB, server, 19190, policy_overrides=overrides)
+        return result
+
+    def targets(self, candidates):
+        return {uid: routing_rollout.target_servers(self.m.DB, uid,
+                    user_routing.get_policy(self.m.DB, uid)['applied'], document)
+                for uid, document in candidates.items()}
+
+    def validate_documents(self, documents):
+        for document in documents.values():
+            routing.set_rule_paths(document, self.m.DIRECTORY)
+            try:
+                self.m.check_document(document)
+            except Exception as error:
+                raise ValueError('核心校验未通过，原策略保持不变，请联系管理员') from error
+
+    def signatures(self, documents):
+        for document in documents.values():
+            routing.set_rule_paths(document, self.m.DIRECTORY)
+        return json.dumps(documents, sort_keys=True, separators=(',', ':'))
+
+    def local_confirmed(self, documents):
+        from .server_traffic import summary
+        return 'local' in documents and not summary(self.m.DB, 'local')['blocked']
 
     def recover(self):
         with self.m.runtime.lock, connect(self.m.DB) as db:
@@ -125,8 +167,12 @@ class Publisher:
         try:
             # Network downloads happen outside the core lock. Do not pause
             # accounting or administrator operations while GitHub is slow.
-            preview = user_routing.compose(config(records(m.DB,'nodes'), records(m.DB,'users'), records(m.DB,'memberships'), m.STATS_PORT), m.DB, policy_overrides=candidates)
-            routing.prepare_rule_sets(preview, m.DIRECTORY, m.BINARY, 30)
+            targets = self.targets(candidates)
+            documents = self.documents(set().union(*targets.values()), candidates)
+            for document in documents.values():
+                routing.prepare_rule_sets(document, m.DIRECTORY, m.BINARY, 30)
+            self.validate_documents(documents)
+            validated = self.signatures(documents)
             if self.stopped.is_set():
                 raise ValueError('服务正在停止，原策略与草稿已保留')
             with m.runtime.lock:
@@ -137,12 +183,10 @@ class Publisher:
                     if reason(self.user(uid)):
                         raise ValueError('账户状态已变化，请刷新后重新应用')
                     user_routing.validate_draft(m.DB, uid, document)
-                preview = user_routing.compose(config(records(m.DB,'nodes'), records(m.DB,'users'), records(m.DB,'memberships'), m.STATS_PORT), m.DB, policy_overrides=candidates)
-                routing.set_rule_paths(preview, m.DIRECTORY)
-                try:
-                    m.check_document(preview)
-                except Exception as error:
-                    raise ValueError('核心校验未通过，原策略保持不变，请联系管理员') from error
+                targets = self.targets(candidates)
+                documents = self.documents(set().union(*targets.values()), candidates)
+                if self.signatures(documents) != validated:
+                    raise ValueError('节点或分流配置已变化，请刷新后重新应用')
                 with connect(m.DB) as db:
                     db.execute('BEGIN IMMEDIATE')
                     for uid, document in candidates.items():
@@ -154,10 +198,14 @@ class Publisher:
                     db.execute('INSERT OR REPLACE INTO routing_publish_journal VALUES(1,?)', (json.dumps(previous),))
                 promoted = True
                 self.last_batch = time.monotonic()
-                m.runtime.apply()
+                local_affected = 'local' in documents
+                if local_affected:
+                    m.runtime.apply()
                 with connect(m.DB) as db:
                     for uid in candidates:
-                        db.execute("UPDATE user_routing SET status='applied',error='',applied_at=? WHERE user_id=?", (int(time.time()), uid))
+                        db.execute("UPDATE user_routing SET error='',applied_at=? WHERE user_id=?", (int(time.time()), uid))
+                        revision = db.execute('SELECT applied_revision FROM user_routing WHERE user_id=?', (uid,)).fetchone()[0]
+                        routing_rollout.publish(db, uid, revision, targets[uid], local_confirmed=self.local_confirmed(documents))
                         audit(db, '用户应用分流', uid)
                     db.execute('DELETE FROM routing_publish_journal')
         except Exception as error:
@@ -170,7 +218,8 @@ class Publisher:
                         with connect(m.DB) as db:
                             for old in previous:
                                 db.execute('UPDATE user_routing SET applied=?,applied_revision=?,applied_at=? WHERE user_id=?', (old['applied'],old['applied_revision'],old['applied_at'],old['user_id']))
-                        m.runtime.apply()
+                        if 'local' in documents:
+                            m.runtime.apply()
                         with connect(m.DB) as db:
                             db.execute('DELETE FROM routing_publish_journal')
                 except Exception:
@@ -190,15 +239,40 @@ class Publisher:
             old = user_routing.get_policy(self.m.DB, uid)
             if old['status'] in ('queued','applying'):
                 raise ValueError('正在应用，请稍后重试')
-            empty = json.dumps({'enabled':True,'rules':[]})
+            document = {'enabled':True,'rules':[]}
+            empty = json.dumps(document)
+            targets = routing_rollout.target_servers(self.m.DB, uid, old['applied'], document)
+            documents = self.documents(targets, {uid: document})
+        self.validate_documents(documents)
+        validated = self.signatures(documents)
+        with self.m.runtime.lock:
+            if user_routing.get_policy(self.m.DB, uid) != old:
+                raise ValueError('用户策略已变化，请刷新后重试')
             with connect(self.m.DB) as db:
-                db.execute("UPDATE user_routing SET draft=?,applied=?,revision=revision+1,applied_revision=revision+1,status='applied',error='',updated_at=?,applied_at=? WHERE user_id=?", (empty,empty,int(time.time()),int(time.time()),uid))
+                if db.execute('SELECT 1 FROM routing_publish_journal').fetchone():
+                    raise ValueError('上次应用仍在恢复，请联系管理员检查核心状态')
+            current_targets = routing_rollout.target_servers(self.m.DB, uid, old['applied'], document)
+            documents = self.documents(current_targets, {uid: document})
+            if current_targets != targets or self.signatures(documents) != validated:
+                raise ValueError('节点或分流配置已变化，请刷新后重试')
+            previous = [{key: json.dumps(old[key]) if key == 'applied' else old[key]
+                         for key in ('user_id', 'applied', 'applied_revision', 'applied_at')}]
+            with connect(self.m.DB) as db:
+                db.execute("UPDATE user_routing SET draft=?,applied=?,revision=revision+1,applied_revision=revision+1,status='applying',error='',updated_at=?,applied_at=? WHERE user_id=?", (empty,empty,int(time.time()),int(time.time()),uid))
+                db.execute('INSERT OR REPLACE INTO routing_publish_journal VALUES(1,?)', (json.dumps(previous),))
             try:
-                self.m.runtime.apply()
+                if 'local' in documents:
+                    self.m.runtime.apply()
+                with connect(self.m.DB) as db:
+                    routing_rollout.publish(db, uid, old['revision'] + 1, targets, local_confirmed=self.local_confirmed(documents))
+                    db.execute('DELETE FROM routing_publish_journal')
             except Exception:
                 try:
                     user_routing.restore_policy(self.m.DB, uid, old)
-                    self.m.runtime.apply()
+                    if 'local' in documents:
+                        self.m.runtime.apply()
+                    with connect(self.m.DB) as db:
+                        db.execute('DELETE FROM routing_publish_journal')
                 except Exception:
                     self.m.runtime.error = '恢复默认未完成，请检查核心状态'
                     raise ValueError('恢复未完成，请检查核心状态后重试') from None

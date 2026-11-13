@@ -110,15 +110,16 @@ def install(app,m):
         user=find(records(m.DB,'users'),identity)
         from .user_routing import get_policy,configure_user,restore_policy
         def update_policy():
+            if raw.get('intent')=='reset':
+                m.authenticated(request)
+                m.routing_publisher.reset_user(identity)
+                log('恢复用户默认分流',user['name'])
+                return '默认策略已发布，相关机器确认后生效'
             with m.runtime.lock:
                 m.authenticated(request)
                 old=get_policy(m.DB,identity)
                 if old.get('status') in ('queued','applying'):
                     raise ValueError('用户策略正在应用，请完成后再修改权限')
-                if raw.get('intent')=='reset':
-                    m.routing_publisher.reset_user(identity)
-                    log('恢复用户默认分流',user['name'])
-                    return '已恢复管理员默认分流'
                 allowed=r.truth(raw.get('allowed'))
                 maximum=r.number(raw,'max_rules',6,1,50)
                 configure_user(m.DB,identity,allowed,maximum)

@@ -9,11 +9,24 @@ from .options import listen_options, snell_options, reality_tls, options, certif
 
 PROTOCOLS = ('snell5', 'snell6', 'reality', 'hysteria2', 'anytls')
 
+class DatabaseConnection(sqlite3.Connection):
+    """Commit or roll back, then release the connection at the scope boundary."""
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def connect(path):
-    db = sqlite3.connect(path, timeout=20)
+    db = sqlite3.connect(path, timeout=20, factory=DatabaseConnection)
     db.row_factory = sqlite3.Row
-    db.execute('PRAGMA journal_mode=WAL')
-    db.execute('PRAGMA foreign_keys=ON')
+    try:
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('PRAGMA foreign_keys=ON')
+    except Exception:
+        db.close()
+        raise
     return db
 
 def init_db(path):

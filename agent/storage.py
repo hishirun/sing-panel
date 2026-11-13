@@ -8,6 +8,14 @@ import uuid
 from pathlib import Path
 
 
+class SpoolConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -53,10 +61,14 @@ class Spool:
         self.path.chmod(0o600)
 
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=15)
+        db = sqlite3.connect(self.path, timeout=15, factory=SpoolConnection)
         db.row_factory = sqlite3.Row
-        db.execute('PRAGMA journal_mode=WAL')
-        db.execute('PRAGMA synchronous=FULL')
+        try:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('PRAGMA synchronous=FULL')
+        except Exception:
+            db.close()
+            raise
         return db
 
     def store(self, epoch, counters):

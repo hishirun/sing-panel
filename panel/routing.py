@@ -225,6 +225,23 @@ def rule_input(raw,nodes,outbounds):
     if not name:raise ValueError('请输入规则名称')
     return dict(name=name,target=target,match=match,node_ids=list(dict.fromkeys(node_ids)))
 
+def _geo_match(match,sets):
+    """Preserve conjunctions while replacing legacy Geo selectors with rule sets."""
+    match=copy.deepcopy(match)
+    geo=[]
+    for kind in ('geosite','geoip'):
+        selected=match.pop(kind,[])
+        if selected:
+            tags=[]
+            for value in selected:
+                if value not in GEO_CATALOG[kind]:raise ValueError('无效规则集：'+kind+':'+value)
+                tag=kind+'-'+value;tags.append(tag)
+                sets[tag]={'type':'remote','tag':tag,'format':'binary','url':'https://raw.githubusercontent.com/SagerNet/sing-'+kind+'/rule-set/'+tag+'.srs','http_client':{'version':1},'update_interval':'24h'}
+            geo.append({'rule_set':tags})
+    parts=([match] if match else [])+geo
+    return parts[0] if len(parts)==1 else {'type':'logical','mode':'and','rules':parts} if parts else {}
+
+
 def compile_into(document,settings):
     outs=[o for o in settings['outbounds'] if o['enabled']]
     ids={o['id'] for o in outs}
@@ -240,21 +257,16 @@ def compile_into(document,settings):
             if not tags:continue
             match['inbound']=tags
         if match.get('protocol') and not settings.get('sniff'):raise ValueError('使用协议条件时请开启协议嗅探')
-        geo=[]
-        for kind in ('geosite','geoip'):
-            selected=match.pop(kind,[])
-            if selected:
-                tags=[]
-                for value in selected:
-                    if value not in GEO_CATALOG[kind]:raise ValueError('无效规则集：'+kind+':'+value)
-                    tag=kind+'-'+value;tags.append(tag)
-                    sets[tag]={'type':'remote','tag':tag,'format':'binary','url':'https://raw.githubusercontent.com/SagerNet/sing-'+kind+'/rule-set/'+tag+'.srs','http_client':{'version':1},'update_interval':'24h'}
-                geo.append({'rule_set':tags})
-        if geo:
-            parts=([match] if match else [])+geo
-            match=parts[0] if len(parts)==1 else {'type':'logical','mode':'and','rules':parts}
         target=rule['target']
         if target not in ids|{'direct','reject'}:raise ValueError('规则引用了不可用出口')
+        if match.get('ip_cidr') or match.get('geoip') or match.get('ip_is_private'):
+            # Resolve immediately before this destination-IP rule, not after
+            # all mandatory rules. Earlier domain/fixed decisions still win.
+            # Keep every non-IP condition so unrelated users/nodes are not
+            # forced to resolve and destination IP isn't required to resolve it.
+            resolution={key:value for key,value in match.items() if key not in ('ip_cidr','geoip','ip_is_private')}
+            rules.append({**_geo_match(resolution,sets),'action':'resolve','strategy':'prefer_ipv4'})
+        match=_geo_match(match,sets)
         if match.get('protocol') and not settings.get('sniff'):raise ValueError('使用协议条件时请开启协议嗅探')
         rules.append({**match,'action':'reject'} if target=='reject' else {**match,'action':'route','outbound':'direct' if target=='direct' else 'up-'+target})
     document['route']={'rules':rules,'final':'direct' if settings['final']=='direct' else 'up-'+settings['final']}

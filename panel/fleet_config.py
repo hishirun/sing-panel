@@ -24,7 +24,7 @@ def retain_used_outbounds(document):
     document['outbounds']=[item for item in document.get('outbounds',[]) if item['tag'] in needed]
 
 
-def configuration(path, server_id, stats_port=19190):
+def configuration(path, server_id, stats_port=19190, policy_overrides=None):
     with connect(path) as db:
         server=db.execute('SELECT * FROM servers WHERE id=?',(server_id,)).fetchone()
         if server is None:
@@ -32,7 +32,7 @@ def configuration(path, server_id, stats_port=19190):
         nodes=[dict(row) for row in db.execute('SELECT * FROM nodes WHERE server_id=? ORDER BY rowid',(server_id,))]
         users=[dict(row) for row in db.execute('SELECT * FROM users')]
         memberships=[dict(row) for row in db.execute('SELECT m.* FROM memberships m JOIN nodes n ON n.id=m.node_id WHERE n.server_id=?',(server_id,))]
-    document=compose(config(nodes,users,memberships,stats_port),path)
+    document=compose(config(nodes,users,memberships,stats_port),path,policy_overrides=policy_overrides)
     retain_used_outbounds(document)
     # Master filesystem paths are never meaningful on the remote machine.
     # Only validated TLS material for that machine's inbounds is transferred.

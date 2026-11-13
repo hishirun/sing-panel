@@ -66,6 +66,8 @@ class Runtime:
             document['experimental']['clash_api']={'external_controller':f'127.0.0.1:{self.port+1}','secret':self.control_secret}
             signature = json.dumps(document, sort_keys=True)
             if self.process and self.process.poll() is None and signature == self.signature:
+                from .routing_rollout import confirm_local
+                confirm_local(self.db)
                 return
             if self.rejected and self.rejected[0]==signature and self.process and self.process.poll() is None:
                 raise RuntimeError(self.rejected[1])
@@ -96,6 +98,8 @@ class Runtime:
                 raise
             self.signature = signature
             self.rejected = None
+            from .routing_rollout import confirm_local
+            confirm_local(self.db)
 
     def control(self,path='/connections',method='GET'):
         request=Request(f'http://127.0.0.1:{self.port+1}'+path,method=method,

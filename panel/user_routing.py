@@ -221,10 +221,10 @@ def validate_draft(path, user_id, document, settings=None, allow_unavailable=Fal
         selected_nodes = _strings(raw.get('node_ids', []), '适用节点', 100, 64)
         if not set(selected_nodes) <= node_ids:
             # Old references to removed grants are inert in the compiler. Only
-            # retained disabled rules can preserve those references in a draft.
-            existing = next((item for doc in (policy['draft'], policy['applied']) for item in doc.get('rules', [])
-                             if item['id'] == identity), None)
-            if active or not existing or selected_nodes != existing.get('node_ids', []):
+            # retained disabled rules/policies can preserve those references.
+            retained_nodes = any(item.get('id') == identity and set(selected_nodes) == set(item.get('node_ids', []))
+                                 for doc in (policy['draft'], policy['applied']) for item in doc.get('rules', []))
+            if (active and enabled) or not retained_nodes:
                 raise ValueError('请选择已授权的节点')
         name = raw.get('name', '')
         if not isinstance(name, str) or len(name) > 80 or any(ord(c) < 32 for c in name):

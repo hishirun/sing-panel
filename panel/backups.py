@@ -2,6 +2,7 @@
 import json,os,re,sqlite3,tarfile,tempfile,threading,time
 from datetime import datetime,timezone
 from pathlib import Path
+from contextlib import closing
 from .core import connect
 PATTERN=re.compile(r'^panel-\d{8}T\d{6}-[0-9a-f]{8}\.tar\.gz$')
 
@@ -42,7 +43,8 @@ class Manager:
             try:
                 with tempfile.TemporaryDirectory(dir=folder) as working:
                     snapshot=Path(working)/'panel.db'
-                    with sqlite3.connect(self.path,timeout=20) as source,sqlite3.connect(snapshot) as dest:source.backup(dest,pages=128,sleep=.01)
+                    with closing(sqlite3.connect(self.path,timeout=20)) as source, closing(sqlite3.connect(snapshot)) as dest:
+                        source.backup(dest,pages=128,sleep=.01)
                     snapshot.chmod(0o600)
                     with tarfile.open(partial,'w:gz') as archive:
                         archive.add(snapshot,arcname='panel.db')

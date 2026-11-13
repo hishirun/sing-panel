@@ -276,3 +276,4 @@ def test_preview_matches_real_srs_but_never_exposes_private_admin_exit(customer,
     monkeypatch.setattr(routing,'prepare_rule_sets',lambda *args:pytest.fail('preview must not download rules'))
     unknown=c.post(root+'/preview',json={'csrf':t,'destination':'api.openai.com','node_id':'n'}).json()
     assert unknown['outbound_name']=='待确定'
+    assert unknown['matched'] is None

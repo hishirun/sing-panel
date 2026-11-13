@@ -6,9 +6,10 @@ import time
 from fastapi import HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .core import connect, records, reason
+from .core import connect, reason
 from .sharing import read_settings
 from . import routing, user_routing as ur
+from .customer_routing_scope import nodes as scoped_nodes
 
 SERVICE_NAMES = {'category-ai-!cn':'海外 AI 服务','openai':'OpenAI','anthropic':'Claude / Anthropic',
     'google':'Google 谷歌','github':'GitHub','telegram':'Telegram','netflix':'Netflix 奈飞',
@@ -19,6 +20,39 @@ REGION_NAMES = {'cn':'中国','us':'美国','jp':'日本','hk':'香港','tw':'�
     'gb':'英国','de':'德国','fr':'法国','ca':'加拿大','au':'澳大利亚','nl':'荷兰','ru':'俄罗斯',
     'in':'印度','tr':'土耳其','br':'巴西','my':'马来西亚','th':'泰国','id':'印度尼西亚','vn':'越南',
     'ph':'菲律宾','it':'意大利','es':'西班牙','ch':'瑞士','se':'瑞典','fi':'芬兰','no':'挪威'}
+
+
+def presets():
+    choices = [('ai', 'AI 服务', ['category-ai-!cn'], 'ChatGPT · Claude 等'),
+               ('streaming', '流媒体', ['netflix','youtube','disney','spotify'], '视频与音乐'),
+               ('social', '社交', ['category-social-media-!cn','telegram'], '海外社交与通讯'),
+               ('games', '游戏', ['category-games'], '游戏平台与服务'),
+               ('ads', '广告', ['category-ads-all'], '广告与追踪')]
+    return [{'id': key, 'name': name, 'kind': 'geosite', 'values': valid, 'label': label}
+            for key, name, values, label in choices
+            if (valid := [value for value in values if value in routing.GEO_CATALOG['geosite']])]
+
+
+def rule_warnings(document, nodes):
+    """Definite shadowing only; different sets may overlap without being equal."""
+    assigned = {node['id'] for node in nodes if node['available'] and not node['locked']}
+    prior = []
+    warnings = []
+    if not document.get('enabled'):
+        return warnings
+    for rule in document.get('rules', []):
+        if not rule.get('enabled'):
+            continue
+        scope = set(rule.get('node_ids') or assigned) & assigned
+        if not scope:
+            warnings.append({'rule_id': rule['id'], 'message': '当前没有可覆盖的可用节点'})
+        for previous, previous_scope in prior:
+            if (scope and scope <= previous_scope and rule['kind'] == previous['kind']
+                    and set(rule['values']) <= set(previous['values'])):
+                warnings.append({'rule_id': rule['id'], 'message': '匹配内容已被前面的「' + previous['name'] + '」覆盖'})
+                break
+        prior.append((rule, scope))
+    return warnings
 
 
 def install(app, m):
@@ -70,28 +104,27 @@ def install(app, m):
         root = (settings['public_url'] or str(request.base_url).rstrip('/')) + settings['share_path'] + '/' + token
         request.session.setdefault('csrf', m.secrets.token_urlsafe(32))
         safe = {key:policy[key] for key in ('allowed','max_rules','revision','applied_revision','status','error','applied_at')}
-        safe['draft'] = policy['draft'] if allowed else {'enabled':False,'rules':[]}
+        for key in ('draft', 'applied'):
+            safe[key] = json.loads(json.dumps(policy[key])) if allowed else {'enabled':False,'rules':[]}
         data = routing.load(m.DB)
-        members = {x['node_id'] for x in records(m.DB,'memberships') if x['user_id'] == user['id']}
-        nodes = []
-        for node in records(m.DB,'nodes'):
-            if node['id'] not in members:
-                continue
-            locked = any(r.get('enabled') and r.get('priority','forced') != 'default' and not r.get('match')
-                         and (not r.get('node_ids') or node['id'] in r['node_ids']) for r in data['rules'])
-            nodes.append({'id':node['id'],'name':node['name'],'locked':locked,'enabled':bool(node['enabled'])})
+        nodes = scoped_nodes(m.DB, user['id'], data) if allowed else []
         outs = [{**out,'usable':out['selectable'],**out['latency']} for out in ur.public_outbounds(m.DB,user,data)] if allowed else []
         # Mark references that were revoked without revealing private metadata.
         usable = {out['id'] for out in outs if out['usable']}
         if allowed:
-            safe['draft'] = json.loads(json.dumps(safe['draft']))
-            for rule in safe['draft']['rules']:
-                if rule['target'] != 'reject' and rule['target'] not in usable:
-                    rule['unavailable'] = True
+            for key in ('draft', 'applied'):
+                for rule in safe[key]['rules']:
+                    if rule['target'] != 'reject' and rule['target'] not in usable:
+                        rule['unavailable'] = True
+            from .routing_rollout import public_status
+            safe['rollout'] = public_status(m.DB, user['id'])
+        else:
+            safe['rollout'] = {'revision': 0, 'total': 0, 'confirmed': 0, 'state': 'idle', 'targets': []}
+        safe['warnings'] = rule_warnings(safe['draft'], nodes)
         why = reason(user) or ('' if policy['allowed'] else '管理员尚未开启自定义分流')
         return {'csrf':request.session['csrf'],'share_url':root,'locked':not allowed,
                 'editable':bool(allowed and not why),'reason':why,
-                'policy':safe,'outbounds':outs,'nodes':nodes if allowed else []}
+                'policy':safe,'outbounds':outs,'nodes':nodes,'presets':presets() if allowed else []}
 
     def busy(policy):
         if policy['status'] in ('queued','applying'):
@@ -137,7 +170,9 @@ def install(app, m):
                 busy(policy)
                 if type(raw.get('revision')) is not int or raw['revision'] != policy['revision']:
                     raise HTTPException(409, '规则已在其他页面更新，请刷新后重试')
-                db.execute("UPDATE user_routing SET draft=applied,revision=revision+1,applied_revision=revision+1,status='applied',error='' WHERE user_id=?", (user['id'],))
+                # Revision is an edit token; applied_revision identifies an
+                # actual publication and must not invalidate machine receipts.
+                db.execute("UPDATE user_routing SET draft=applied,revision=revision+1,status='applied',error='' WHERE user_id=?", (user['id'],))
         await run_in_threadpool(restore)
         return state(request, token)
 
@@ -194,7 +229,7 @@ def install(app, m):
             preview_users.add(user['id'])
         from .routing_preview import preview as calculate
         try:
-            return await run_in_threadpool(calculate,m,user,policy,raw.get('destination'),raw.get('node_id'))
+            return await run_in_threadpool(calculate,m,user,policy,raw.get('destination'),raw.get('node_id'),raw.get('mode','draft'))
         except ValueError as error:
             raise HTTPException(422,str(error))
         finally:

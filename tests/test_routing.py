@@ -175,7 +175,10 @@ def test_geo_catalog_multiselect_logic_and_core(tmp_path):
     rule=r.rule_input(raw,[],[])
     settings=copy.deepcopy(r.DEFAULT);settings['rules']=[dict(id='geo',enabled=True,**rule)]
     document=r.compile_into({'inbounds':[],'outbounds':[{'type':'direct','tag':'direct'}]},settings)
-    compiled=document['route']['rules'][0]
+    assert [item['action'] for item in document['route']['rules']]==['resolve','route']
+    resolver=document['route']['rules'][0]
+    assert resolver['rules']==[{'port':[443]},{'rule_set':['geosite-google','geosite-github']}]
+    compiled=next(item for item in document['route']['rules'] if item['action']=='route')
     assert compiled['type']=='logical' and compiled['mode']=='and'
     assert compiled['rules']==[{'port':[443]},{'rule_set':['geosite-google','geosite-github']},{'rule_set':['geoip-cn','geoip-us']}]
     assert len(document['route']['rule_set'])==4

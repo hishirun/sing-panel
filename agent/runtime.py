@@ -40,6 +40,7 @@ class Core:
         self.state.setdefault('command_results', [])
         self.state.setdefault('desired_state', 'stopped')
         self.state.setdefault('revision', '')
+        self.state.setdefault('apply_result', {})
         self.state.setdefault('control_secret', secrets.token_urlsafe(32))
         self.state.setdefault('policy', {'max_ips': {}})
         self.spool = Spool(self.directory)
@@ -366,7 +367,19 @@ class Core:
         try:
             if state == 'running':
                 if message.get('config') is not None:
-                    self.apply(message['config'], message.get('revision', ''))
+                    revision = message.get('revision', '')
+                    try:
+                        self.apply(message['config'], revision)
+                    except Exception:
+                        if isinstance(revision, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}', revision):
+                            with self.lock:
+                                self.state['apply_result'] = {'revision': revision, 'ok': False,
+                                                              'error': '节点配置校验或启动失败'}
+                                self.persist()
+                        raise
+                    with self.lock:
+                        self.state['apply_result'] = {'revision': revision, 'ok': True, 'error': ''}
+                        self.persist()
                 elif not self.running() and self.target.exists() and self.state['revision'] == message.get('revision'):
                     with self.lock:
                         self.launch()
@@ -400,6 +413,7 @@ class Core:
                     machine.update(connection_count=None, online_users=None)
             return {'type': 'report', 'protocol': 1, **report, 'metrics': machine,
                     'applied_revision': self.state['revision'], 'error': self.error,
+                    'apply_result': dict(self.state['apply_result']) or None,
                     'connections': connections, 'connections_truncated': truncated,
                     'command_acks': list(self.state['command_acks'][-100:]),
                     'command_results': list(self.state['command_results'][-100:])}

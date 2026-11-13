@@ -83,6 +83,8 @@ def migrate(db):
             db.execute(f'ALTER TABLE servers ADD COLUMN {key} {definition}')
     if 'source_ip' not in {r[1] for r in db.execute('PRAGMA table_info(server_commands)')}:
         db.execute("ALTER TABLE server_commands ADD COLUMN source_ip TEXT NOT NULL DEFAULT ''")
+    from .routing_rollout import migrate as migrate_rollout
+    migrate_rollout(db)
 
 
 def _hash(value):
@@ -347,6 +349,8 @@ def set_action(path, identity, action):
                 if _counts(db).get(identity, 0):
                     raise ValueError('此服务器仍有节点，请先删除或迁移节点')
                 db.execute('DELETE FROM servers WHERE id=?', (identity,))
+                from .routing_rollout import retire_server
+                retire_server(db, identity)
             else:
                 raise ValueError('不支持的服务器操作')
     return None
@@ -500,6 +504,12 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
     error = report.get('error', '')
     if not isinstance(applied, str) or len(applied) > 128 or not isinstance(error, str) or len(error) > 4000:
         raise ValueError('应用状态格式无效')
+    apply_result = report.get('apply_result')
+    if apply_result is not None and (not isinstance(apply_result, dict)
+            or not isinstance(apply_result.get('revision'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', apply_result['revision'])
+            or not isinstance(apply_result.get('ok'), bool)):
+        raise ValueError('配置应用回执格式无效')
     command_acks = report.get('command_acks', [])
     if not isinstance(command_acks, list) or len(command_acks) > 100 or any(not isinstance(v, str) or not _ID.fullmatch(v) for v in command_acks):
         raise ValueError('操作回执格式无效')
@@ -592,5 +602,10 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
         if traffic.get('blocked'):
             desired['reason'] = '机器月流量额度已用尽'
         if applied != revision or any(command['action'] == 'resync' for command in commands):
+            desired['config'] = document
+        from .routing_rollout import remember_delivery, observe
+        observe(path, identity, applied, metrics.get('running') is True and desired['state'] == 'running',
+                apply_result if desired['state'] == 'running' else None)
+        if remember_delivery(path, identity, revision):
             desired['config'] = document
         return desired

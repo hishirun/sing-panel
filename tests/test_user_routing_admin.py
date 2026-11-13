@@ -124,7 +124,7 @@ def test_admin_restore_defaults_clears_rules_but_preserves_user_access(admin):
                   applied={'enabled':True,'rules':[{'id':'applied','name':'Applied','enabled':True,'kind':'domain_suffix','values':['example.net'],'target':'reject','node_ids':[]}]})
     ur.restore_policy(m.DB,'u',policy)
     response=c.post('/users/u/routing',data={'token':t,'intent':'reset'})
-    assert response.status_code==200 and '已恢复管理员默认分流' in response.text
+    assert response.status_code==200 and '默认策略已发布' in response.text
     after=ur.get_policy(m.DB,'u')
     assert after['draft']['rules']==[] and after['applied']['rules']==[]
     assert after['allowed'] and after['password_hash']==policy['password_hash']

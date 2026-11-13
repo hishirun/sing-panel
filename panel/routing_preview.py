@@ -9,10 +9,13 @@ import time
 from pathlib import Path
 
 from . import routing, user_routing
-from .core import connect, reason
+from .core import reason
+from .customer_routing_scope import nodes as scoped_nodes
 
 
-def preview(m, user, policy, destination, node_id):
+def preview(m, user, policy, destination, node_id, mode='draft'):
+    if mode not in ('draft', 'applied'):
+        raise ValueError('请选择草稿或已发布规则')
     if not isinstance(destination,str) or not destination.strip() or len(destination)>253:
         raise ValueError('请输入域名或 IP 地址，不带协议和路径')
     destination=routing.host(destination.strip().lower())
@@ -20,14 +23,13 @@ def preview(m, user, policy, destination, node_id):
         address=ipaddress.ip_address(destination)
     except ValueError:
         address=None
-    with connect(m.DB) as db:
-        nodes=[dict(row) for row in db.execute('SELECT n.* FROM nodes n JOIN memberships g ON g.node_id=n.id WHERE g.user_id=? AND n.enabled=1', (user['id'],))]
-    selected=next((node for node in nodes if node['id']==node_id),None)
+    settings=routing.load(m.DB)
+    nodes=scoped_nodes(m.DB, user['id'], settings)
+    selected=next((node for node in nodes if node['id']==node_id and node['available']),None)
     if selected is None:
         raise ValueError('请选择一个当前可用节点')
     if reason(user):
         raise ValueError('当前账户不可用，不能推演新连接')
-    settings=routing.load(m.DB)
     public={out['id']:out for out in user_routing.public_outbounds(m.DB,user,settings)}
     permitted={out['id'] for out in settings['outbounds'] if user_routing.allowed_outbound(out,user,policy)}
     cache={}
@@ -87,13 +89,17 @@ def preview(m, user, policy, destination, node_id):
         if host:groups.append(any_result(host))
         return all_result(groups)
 
-    def result(source, name, target, uncertain=False):
+    def result(source, name, target, uncertain=False, rule_id=None):
         label='拦截' if target=='reject' else '服务器直连' if target=='direct' else public.get(target,{}).get('name','管理员指定出口')
+        metadata={'mode':mode, 'matched': None if uncertain else True,
+                  'revision':policy['revision'] if mode=='draft' else policy['applied_revision'],
+                  'rule_id':rule_id, 'node_name':selected['name'], 'server_name':selected['server_name']}
+        note='仅预览规则匹配，不代表连通性。' if selected['online'] else '机器离线；仅预览规则匹配。'
         if uncertain:
-            return {'summary':'匹配结果需要更多信息','rule_name':name,'outbound_name':'待确定','source':source,
-                    'warning':'域名规则需要域名，GeoIP 需要目标 IP。新规则集请应用后再预览；条件过多或涉及端口、协议时，需真实连接验证。'}
-        return {'summary':name+' → '+label,'rule_name':name,'outbound_name':label,'source':source,
-                'warning':'依据已保存草稿与规则集快照推演；仅对经过此节点的流量生效，不代表真实连通性测试。'}
+            return {**metadata,'summary':'还不能确定匹配结果','rule_name':name,'outbound_name':'待确定','source':source,
+                    'warning':'缺少规则集、目标 IP 或连接信息；需实际连接验证。'}
+        return {**metadata,'summary':name+' → '+label,'rule_name':name,'outbound_name':label,'source':source,
+                'warning':note}
 
     forced=[row for row in settings['rules'] if row.get('priority','forced')!='default']
     ordinary=[row for row in settings['rules'] if row.get('priority','forced')=='default']
@@ -109,14 +115,15 @@ def preview(m, user, policy, destination, node_id):
 
     hit=administrative(forced)
     if hit:return hit
-    if policy['allowed'] and policy['draft'].get('enabled'):
-        for row in policy['draft']['rules']:
+    document=policy[mode]
+    if policy['allowed'] and document.get('enabled'):
+        for row in document['rules']:
             if not row['enabled'] or (row.get('node_ids') and node_id not in row['node_ids']):
                 continue
             matched=match({row['kind']:row['values']})
             if matched is not False:
                 target=row['target'] if row['target']=='reject' or row['target'] in permitted else 'reject'
-                value=result('user',row['name'],target,matched is None)
+                value=result('user',row['name'],target,matched is None,row['id'])
                 if target!=row['target']:value['warning']='此规则的出口已不可用；当前连接会被拦截，请替换出口。'
                 return value
     return administrative(ordinary) or result('default','系统默认',settings['final'])
