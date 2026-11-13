@@ -95,7 +95,6 @@ def install(app,m):
         targets['reject']='拦截'
         # Only these fields are rendered; never place a password hash in HTML.
         safe={k:policy.get(k) for k in ('allowed','max_rules','revision','applied_revision','status','error','applied_at')}
-        safe['has_password']=bool(policy.get('password_hash'))
         safe['applied']=policy['applied']
         return m.render(request,'user_routing_admin.html',user=user,policy=safe,values=values or safe,
                         exits=public_outbounds(m.DB,user,settings=settings),targets=targets,error=error,notice=notice)
@@ -121,13 +120,8 @@ def install(app,m):
                     log('恢复用户默认分流',user['name'])
                     return '已恢复管理员默认分流'
                 allowed=r.truth(raw.get('allowed'))
-                maximum=r.number(raw,'max_rules',20,1,50)
-                password=str(raw.get('password',''))
-                if password and not 12<=len(password)<=128:
-                    raise ValueError('设置密码须为 12–128 个字符')
-                if allowed and not old.get('password_hash') and not password:
-                    raise ValueError('首次开启时请设置独立的用户分流密码')
-                configure_user(m.DB,identity,allowed,maximum,password=password or None)
+                maximum=r.number(raw,'max_rules',6,1,50)
+                configure_user(m.DB,identity,allowed,maximum)
                 try:
                     m.runtime.apply()
                 except Exception:
@@ -141,7 +135,7 @@ def install(app,m):
             notice=await run_in_threadpool(update_policy)
             return user_policy_page(request,identity,notice=notice)
         except (ValueError,TypeError) as e:
-            return user_policy_page(request,identity,error=str(e),values={'allowed':r.truth(raw.get('allowed')),'max_rules':raw.get('max_rules',20)})
+            return user_policy_page(request,identity,error=str(e),values={'allowed':r.truth(raw.get('allowed')),'max_rules':raw.get('max_rules',6)})
 
     @app.get('/routing')
     def index(request:Request):m.authenticated(request);return page(request)

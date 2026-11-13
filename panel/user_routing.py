@@ -10,7 +10,6 @@ import re
 import time
 import uuid
 
-from argon2 import PasswordHasher
 from .core import connect, reason
 from . import routing as r
 
@@ -28,7 +27,7 @@ def migrate(db):
     db.execute('''CREATE TABLE IF NOT EXISTS user_routing (
         user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         allowed INTEGER NOT NULL DEFAULT 0,
-        max_rules INTEGER NOT NULL DEFAULT 20,
+        max_rules INTEGER NOT NULL DEFAULT 6,
         password_hash TEXT NOT NULL DEFAULT '',
         auth_revision INTEGER NOT NULL DEFAULT 0,
         draft TEXT NOT NULL DEFAULT '{"enabled":true,"rules":[]}',
@@ -43,7 +42,7 @@ def migrate(db):
 
 
 def _default(user_id):
-    return dict(user_id=user_id, allowed=False, max_rules=20, password_hash='',
+    return dict(user_id=user_id, allowed=False, max_rules=6, password_hash='',
                 auth_revision=0, draft={'enabled': True, 'rules': []}, revision=0,
                 applied={'enabled': False, 'rules': []}, applied_revision=0,
                 status='applied', error='', applied_at=0, updated_at=0, exists=False)
@@ -80,7 +79,7 @@ def restore_policy(path, user_id, policy):
                    ','.join('?' for _ in COLUMNS) + ')', tuple(values[key] for key in COLUMNS))
 
 
-def configure_user(path, user_id, allowed, max_rules=20, password=None):
+def configure_user(path, user_id, allowed, max_rules=6):
     if isinstance(max_rules, bool):
         raise ValueError('规则上限须为 1–50')
     try:
@@ -89,23 +88,16 @@ def configure_user(path, user_id, allowed, max_rules=20, password=None):
         raise ValueError('规则上限须为 1–50')
     if not 1 <= max_rules <= 50:
         raise ValueError('规则上限须为 1–50')
-    password_hash = None
-    if password:
-        if not isinstance(password, str) or not 12 <= len(password) <= 128:
-            raise ValueError('设置密码需要 12–128 个字符')
-        password_hash = PasswordHasher().hash(password)
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
         if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
             raise ValueError('用户不存在')
-        db.execute('INSERT OR IGNORE INTO user_routing(user_id) VALUES(?)', (user_id,))
-        old = db.execute('SELECT * FROM user_routing WHERE user_id=?', (user_id,)).fetchone()
-        password_hash = password_hash or old['password_hash']
-        if allowed and not password_hash:
-            raise ValueError('首次启用请设置独立的用户设置密码')
-        auth_revision = old['auth_revision'] + int(bool(password) or bool(old['allowed']) != bool(allowed))
-        db.execute('UPDATE user_routing SET allowed=?,max_rules=?,password_hash=?,auth_revision=?,updated_at=? WHERE user_id=?',
-                   (int(bool(allowed)), max_rules, password_hash, auth_revision, int(time.time()), user_id))
+        # Explicitly provide the new default even on databases whose original
+        # table definition still declares DEFAULT 20. Legacy auth columns stay
+        # untouched and are no longer used to authorize customer settings.
+        db.execute('INSERT OR IGNORE INTO user_routing(user_id,max_rules) VALUES(?,?)', (user_id,6))
+        db.execute('UPDATE user_routing SET allowed=?,max_rules=?,updated_at=? WHERE user_id=?',
+                   (int(bool(allowed)), max_rules, int(time.time()), user_id))
     return get_policy(path, user_id)
 
 

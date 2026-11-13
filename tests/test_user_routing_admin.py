@@ -48,7 +48,7 @@ def test_outbound_grant_form_persistence_validation_and_public_projection(admin)
     rejected=outbound(c,t,id=row['id'],public_present='1',public_visible='1',
                       public_audience='selected',public_user_ids='missing')
     assert '已不存在' in rejected.text and r.load(m.DB)==before
-    ur.configure_user(m.DB,'u',True,password='customer-password')
+    ur.configure_user(m.DB,'u',True)
     with connect(m.DB) as db:
         user=dict(db.execute("SELECT * FROM users WHERE id='u'").fetchone())
         other=dict(db.execute("SELECT * FROM users WHERE id='v'").fetchone())
@@ -58,27 +58,23 @@ def test_outbound_grant_form_persistence_validation_and_public_projection(admin)
     assert 'private-upstream-password' not in json.dumps(public) and '127.0.0.1' not in json.dumps(public)
 
 
-def test_user_permissions_password_rotation_and_rollback(admin,monkeypatch):
+def test_user_permissions_defaults_and_rollback_without_password(admin,monkeypatch):
     c,m,t=admin
     path='/users/u/routing'
     assert '分流设置' in c.get('/users').text
-    assert c.get(path).status_code==200
-    refused=c.post(path,data={'token':t,'allowed':'1','max_rules':'20'})
-    assert '首次开启' in refused.text and not ur.get_policy(m.DB,'u')['allowed']
-    assert c.post(path,data={'token':t,'allowed':'1','max_rules':'20','password':'independent-password'}).status_code==200
+    page=c.get(path)
+    assert page.status_code==200 and 'name="password"' not in page.text
+    assert 'name="max_rules"' in page.text and 'value="6"' in page.text
+    assert c.post(path,data={'token':t,'allowed':'1'}).status_code==200
     original=ur.get_policy(m.DB,'u')
-    assert original['allowed'] and original['password_hash']
-    assert original['password_hash'] not in c.get(path).text
-    c.post(path,data={'token':t,'allowed':'1','max_rules':'12','password':''})
+    assert original['allowed'] and original['max_rules']==6 and not original['password_hash']
+    c.post(path,data={'token':t,'allowed':'1','max_rules':'12'})
     retained=ur.get_policy(m.DB,'u')
-    assert retained['password_hash']==original['password_hash'] and retained['auth_revision']==original['auth_revision']
-    c.post(path,data={'token':t,'allowed':'1','max_rules':'12','password':'replacement-password'})
-    replaced=ur.get_policy(m.DB,'u')
-    assert replaced['auth_revision']>original['auth_revision']
+    assert retained['max_rules']==12 and retained['auth_revision']==original['auth_revision']
     monkeypatch.setattr(m.runtime,'apply',lambda:(_ for _ in ()).throw(RuntimeError('test')))
     rejected=c.post(path,data={'token':t,'max_rules':'12'})
     assert '已恢复原用户分流权限' in rejected.text
-    assert ur.get_policy(m.DB,'u')==replaced
+    assert ur.get_policy(m.DB,'u')==retained
     assert c.post(path,data={'token':'bad','allowed':'1'}).status_code==403
     c.cookies.clear()
     assert c.get(path).status_code==401
@@ -99,7 +95,7 @@ def test_priority_validation_reordering_and_user_reference_guard(admin):
     rejected=c.post('/routing/rules/save',data={'token':t,'name':'Bad','target':'direct',
                                              'domain_suffix':'example.com','priority':'unknown'})
     assert '有效的规则优先级' in rejected.text and r.load(m.DB)==before
-    ur.configure_user(m.DB,'u',True,password='customer-password')
+    ur.configure_user(m.DB,'u',True)
     policy=ur.get_policy(m.DB,'u')
     policy['applied']={'enabled':True,'rules':[{'id':'r','name':'AI','enabled':True,
                          'kind':'domain_suffix','values':['example.com'],'target':out['id'],'node_ids':[]}]}
@@ -111,7 +107,7 @@ def test_priority_validation_reordering_and_user_reference_guard(admin):
 
 def test_admin_edit_waits_for_inflight_application(admin):
     c,m,t=admin
-    ur.configure_user(m.DB,'u',True,password='customer-password')
+    ur.configure_user(m.DB,'u',True)
     with connect(m.DB) as db:
         db.execute("UPDATE user_routing SET status='queued' WHERE user_id='u'")
     response=c.post('/users/u/routing',data={'token':t,'max_rules':'20'})
@@ -121,7 +117,7 @@ def test_admin_edit_waits_for_inflight_application(admin):
 
 def test_admin_restore_defaults_clears_rules_but_preserves_user_access(admin):
     c,m,t=admin
-    ur.configure_user(m.DB,'u',True,password='customer-password')
+    ur.configure_user(m.DB,'u',True)
     policy=ur.get_policy(m.DB,'u')
     policy.update(revision=3,applied_revision=2,status='draft',
                   draft={'enabled':True,'rules':[{'id':'draft','name':'Draft','enabled':True,'kind':'domain_suffix','values':['example.com'],'target':'reject','node_ids':[]}]},

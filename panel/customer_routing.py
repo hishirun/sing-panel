@@ -1,12 +1,8 @@
-"""Customer-only routing endpoints. Share credentials never grant write access."""
-import hashlib
-import hmac
+"""Customer routing scoped by the share token, administrator grants and CSRF."""
 import json
 import threading
 import time
-from urllib.parse import quote
 
-from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
@@ -43,18 +39,15 @@ def install(app, m):
                 raise HTTPException(429, '操作过于频繁，请稍后再试')
             limits[key] = hits + [now]
 
-    def identity(request, token, require_unlock=False, write=False):
+    def identity(request, token, require_access=False, write=False):
         user = m.subscription_user(token)
         policy = ur.get_policy(m.DB, user['id'])
-        auth = request.session.get('customer_routing', {})
-        unlocked = (auth.get('uid') == user['id'] and auth.get('revision') == policy['auth_revision']
-                    and auth.get('until', 0) > time.time()
-                    and hmac.compare_digest(str(auth.get('token', '')), hashlib.sha256(token.encode()).hexdigest()))
-        if require_unlock and (not unlocked or not policy['allowed']):
-            raise HTTPException(401, '请先解锁分流设置')
-        if write and (not policy['allowed'] or reason(user)):
+        allowed = bool(policy['allowed'])
+        if require_access and not allowed:
+            raise HTTPException(403, '管理员尚未开启自定义分流')
+        if write and (not allowed or reason(user)):
             raise HTTPException(403, reason(user) or '管理员尚未开启自定义分流')
-        return user, policy, unlocked
+        return user, policy, allowed
 
     async def body(request):
         chunks = bytearray()
@@ -72,14 +65,12 @@ def install(app, m):
         return value
 
     def state(request, token):
-        user, policy, unlocked = identity(request, token)
+        user, policy, allowed = identity(request, token)
         settings = read_settings(m.DB)
         root = (settings['public_url'] or str(request.base_url).rstrip('/')) + settings['share_path'] + '/' + token
         request.session.setdefault('csrf', m.secrets.token_urlsafe(32))
-        can_unlock = bool(policy['allowed'] and policy['password_hash'])
-        unlocked = unlocked and can_unlock
         safe = {key:policy[key] for key in ('allowed','max_rules','revision','applied_revision','status','error','applied_at')}
-        safe['draft'] = policy['draft'] if unlocked else {'enabled':False,'rules':[]}
+        safe['draft'] = policy['draft'] if allowed else {'enabled':False,'rules':[]}
         data = routing.load(m.DB)
         members = {x['node_id'] for x in records(m.DB,'memberships') if x['user_id'] == user['id']}
         nodes = []
@@ -89,18 +80,18 @@ def install(app, m):
             locked = any(r.get('enabled') and r.get('priority','forced') != 'default' and not r.get('match')
                          and (not r.get('node_ids') or node['id'] in r['node_ids']) for r in data['rules'])
             nodes.append({'id':node['id'],'name':node['name'],'locked':locked,'enabled':bool(node['enabled'])})
-        outs = [{**out,'usable':out['selectable'],**out['latency']} for out in ur.public_outbounds(m.DB,user,data)] if unlocked else []
+        outs = [{**out,'usable':out['selectable'],**out['latency']} for out in ur.public_outbounds(m.DB,user,data)] if allowed else []
         # Mark references that were revoked without revealing private metadata.
         usable = {out['id'] for out in outs if out['usable']}
-        if unlocked:
+        if allowed:
             safe['draft'] = json.loads(json.dumps(safe['draft']))
             for rule in safe['draft']['rules']:
                 if rule['target'] != 'reject' and rule['target'] not in usable:
                     rule['unavailable'] = True
         why = reason(user) or ('' if policy['allowed'] else '管理员尚未开启自定义分流')
-        return {'csrf':request.session['csrf'],'share_url':root,'locked':not unlocked,
-                'editable':bool(unlocked and not why),'reason':why,'can_unlock':can_unlock,
-                'policy':safe,'outbounds':outs,'nodes':nodes if unlocked else []}
+        return {'csrf':request.session['csrf'],'share_url':root,'locked':not allowed,
+                'editable':bool(allowed and not why),'reason':why,
+                'policy':safe,'outbounds':outs,'nodes':nodes if allowed else []}
 
     def busy(policy):
         if policy['status'] in ('queued','applying'):
@@ -118,35 +109,6 @@ def install(app, m):
 
     @app.get('/s/{token}/routing/api')
     def api(request:Request, token:str):
-        return state(request, token)
-
-    @app.post('/s/{token}/routing/unlock')
-    async def unlock(request:Request, token:str):
-        raw = await body(request)
-        user, policy, _ = identity(request, token)
-        if not policy['allowed'] or not policy['password_hash']:
-            raise HTTPException(403, '管理员尚未开启自定义分流')
-        limited(('unlock',user['id'],request.client.host), 8, 300)
-        password = raw.get('password')
-        if not isinstance(password,str) or len(password)>255:
-            raise HTTPException(422, '设置密码不正确')
-        try:
-            await run_in_threadpool(m.ph.verify, policy['password_hash'], password)
-        except (VerificationError,InvalidHashError):
-            raise HTTPException(422, '设置密码不正确')
-        # Recheck after the expensive hash in case the admin revoked access.
-        current = ur.get_policy(m.DB,user['id'])
-        if not current['allowed'] or current['auth_revision'] != policy['auth_revision']:
-            raise HTTPException(403, '设置权限已更新，请重试')
-        request.session['customer_routing'] = {'uid':user['id'],'revision':policy['auth_revision'],
-            'until':int(time.time())+7200,'token':hashlib.sha256(token.encode()).hexdigest()}
-        return state(request, token)
-
-    @app.post('/s/{token}/routing/lock')
-    async def lock(request:Request, token:str):
-        await body(request)
-        identity(request, token)
-        request.session.pop('customer_routing', None)
         return state(request, token)
 
     @app.post('/s/{token}/routing/draft')

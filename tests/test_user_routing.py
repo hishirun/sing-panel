@@ -7,9 +7,6 @@ from panel.core import connect, init_db, current_config, records, set_membership
 from panel import routing as r
 from panel import user_routing as ur
 
-PASSWORD = 'test-settings-password-123'
-
-
 @pytest.fixture
 def policy_db(tmp_path):
     path = tmp_path / 'panel.db'
@@ -35,7 +32,7 @@ def policy_db(tmp_path):
     ]
     r.write(path, data)
     for uid in ('alice', 'bob'):
-        ur.configure_user(path, uid, True, 20, PASSWORD)
+        ur.configure_user(path, uid, True, 20)
     return path
 
 
@@ -108,10 +105,12 @@ def test_draft_strict_validation(policy_db):
         ur.validate_draft(policy_db, 'alice', doc)
 
 
-def test_password_permissions_and_restore(policy_db):
+def test_permissions_and_restore_without_password(policy_db):
+    with connect(policy_db) as db:
+        db.execute("UPDATE user_routing SET password_hash='legacy-unused-hash',auth_revision=7 WHERE user_id='alice'")
     old = ur.get_policy(policy_db, 'alice')
-    changed = ur.configure_user(policy_db, 'alice', False)
-    assert changed['auth_revision'] == old['auth_revision']+1
+    changed = ur.configure_user(policy_db, 'alice', False, old['max_rules'])
+    assert changed['auth_revision'] == old['auth_revision']
     assert changed['password_hash'] == old['password_hash']
     with pytest.raises(ValueError, match='尚未开启'):
         ur.save_draft(policy_db, 'alice', draft(), 0)
@@ -119,16 +118,43 @@ def test_password_permissions_and_restore(policy_db):
     assert ur.get_policy(policy_db, 'alice') == old
     for invalid in (0, 51, True):
         with pytest.raises(ValueError):ur.configure_user(policy_db, 'alice', True, invalid)
-    with pytest.raises(ValueError):ur.configure_user(policy_db, 'alice', True, password='short')
     with connect(policy_db) as db:
         db.execute("INSERT INTO users(id,name,secret,uuid,token) VALUES('new','New','new','new','new')")
     new = ur.get_policy(policy_db, 'new')
-    assert not new['exists']
-    with pytest.raises(ValueError, match='首次启用'):
-        ur.configure_user(policy_db, 'new', True)
-    ur.configure_user(policy_db, 'new', False)
+    assert not new['exists'] and new['max_rules'] == 6
+    configured = ur.configure_user(policy_db, 'new', True)
+    assert configured['allowed'] and configured['max_rules'] == 6 and not configured['password_hash']
     ur.restore_policy(policy_db, 'new', new)
     assert not ur.get_policy(policy_db, 'new')['exists']
+
+
+def test_default_six_rule_limit_is_enforced(policy_db):
+    ur.configure_user(policy_db, 'alice', True)
+    document = {'enabled':True,'rules':[draft(identity='rule'+str(i))['rules'][0] for i in range(6)]}
+    saved = ur.save_draft(policy_db, 'alice', document, 0)
+    assert saved['max_rules'] == 6 and len(saved['draft']['rules']) == 6
+    document['rules'].append(draft(identity='rule6')['rules'][0])
+    with pytest.raises(ValueError, match='6 条'):
+        ur.save_draft(policy_db, 'alice', document, 1)
+    assert ur.get_policy(policy_db, 'alice')['revision'] == 1
+
+
+def test_legacy_schema_default_does_not_override_new_default_or_existing_limits(tmp_path):
+    path = tmp_path/'panel.db'
+    init_db(path)
+    with connect(path) as db:
+        schema = db.execute("SELECT sql FROM sqlite_master WHERE name='user_routing'").fetchone()[0]
+        db.execute('DROP TABLE user_routing')
+        db.execute(schema.replace('DEFAULT 6','DEFAULT 20'))
+        for uid in ('old','new'):
+            db.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',(uid,uid,uid,uid,uid))
+        db.execute("INSERT INTO user_routing(user_id,max_rules,password_hash,auth_revision) VALUES('old',20,'legacy-hash',9)")
+    init_db(path)
+    old = ur.get_policy(path, 'old')
+    assert old['max_rules'] == 20 and old['password_hash'] == 'legacy-hash' and old['auth_revision'] == 9
+    new = ur.configure_user(path, 'new', True)
+    assert new['max_rules'] == 6 and new['allowed']
+    assert ur.get_policy(path, 'old') == old
 
 
 def test_shared_and_compat_identity_scopes_never_affect_other_user(policy_db):
@@ -302,7 +328,7 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
         settings['final'] = 'exit1'
         r.write(path, settings)
         for i, uid in enumerate(('alice', 'bob')):
-            ur.configure_user(path, uid, True, password=PASSWORD)
+            ur.configure_user(path, uid, True)
             publish_for_test(path, uid, draft('exit'+str(i), kind='ip_cidr', values=['127.0.0.1/32']))
         rt = Runtime(binary, tmp_path, port());rt.apply()
         clients = []

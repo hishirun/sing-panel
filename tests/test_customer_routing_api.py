@@ -1,4 +1,4 @@
-"""Customer sessions, grants and mutation boundaries through the real ASGI app."""
+"""Share-token authorization and mutation boundaries through the real ASGI app."""
 import copy
 import json
 import os
@@ -30,7 +30,7 @@ def customer(client,monkeypatch):
         db.execute("INSERT INTO memberships(user_id,node_id) VALUES('u','n')")
         db.execute("INSERT INTO memberships(user_id,node_id) VALUES('v','other')")
     for uid in ['u','v']:
-        ur.configure_user(m.DB,uid,True,password='password-for-'+uid)
+        ur.configure_user(m.DB,uid,True)
     settings=copy.deepcopy(routing.DEFAULT)
     settings['outbounds']=[{
         'id':oid,'name':'private-name-'+oid,'enabled':True,
@@ -45,12 +45,6 @@ def customer(client,monkeypatch):
     return c,m,root,initial['csrf']
 
 
-def unlock(c,root,csrf,password='password-for-u'):
-    response=c.post(root+'/unlock',json={'csrf':csrf,'password':password})
-    assert response.status_code==200,response.text
-    return response.json()
-
-
 def document(**changes):
     row={'id':'rule-one','name':'Example','enabled':True,'kind':'domain_suffix',
          'values':['example.com'],'target':'mine','node_ids':[]}
@@ -58,16 +52,11 @@ def document(**changes):
     return {'enabled':True,'rules':[row]}
 
 
-def test_link_is_read_only_until_independent_unlock_and_api_projection(customer):
+def test_authorized_link_opens_without_password_and_projects_only_granted_data(customer):
     c,m,root,t=customer
     state=c.get(root+'/api').json()
-    assert state['locked'] and not state['editable'] and state['can_unlock']
-    assert state['policy']['draft']['rules']==[] and not state['outbounds'] and not state['nodes']
-    assert c.get(root+'/catalog').status_code==401
-    assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==401
-    assert c.post(root+'/unlock',json={'csrf':t,'password':'wrong'}).status_code==422
-    state=unlock(c,root,t)
     assert state['editable'] and not state['locked']
+    assert state['policy']['max_rules']==6
     assert [out['id'] for out in state['outbounds']]==['mine']
     assert [node['id'] for node in state['nodes']]==['n']
     encoded=json.dumps(state)
@@ -76,13 +65,31 @@ def test_link_is_read_only_until_independent_unlock_and_api_projection(customer)
     assert c.get(root+'/catalog?kind=geosite&q=AI').json()['items']
     assert c.get(root+'/catalog?kind=unknown').status_code==422
     assert c.get(root+'/catalog?offset=-1').status_code==422
-    assert c.post(root+'/lock',json={'csrf':t}).json()['locked']
-    assert c.get(root+'/catalog').status_code==401
+    for action in ['lock','unlock']:
+        assert c.post(root+'/'+action,json={'csrf':t}).status_code==404
+    assert c.get('/s/unknown-token/routing/api').status_code==404
+    # Each valid token grants access to its own user, independently of browser
+    # sessions. It never grants the first user's exits to the second account.
+    other=c.get('/s/token-v/routing/api').json()
+    assert other['editable'] and not other['locked']
+    assert [out['id'] for out in other['outbounds']]==['theirs']
+    assert [node['id'] for node in other['nodes']]==['other']
+
+
+def test_disabled_feature_remains_protected_even_with_valid_share_token(customer):
+    c,m,root,t=customer
+    ur.configure_user(m.DB,'u',False)
+    state=c.get(root+'/api').json()
+    assert state['locked'] and not state['editable']
+    assert state['policy']['draft']['rules']==[] and not state['outbounds'] and not state['nodes']
+    assert c.get(root+'/catalog').status_code==403
+    assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==403
+    assert c.post(root+'/apply',json={'csrf':t,'revision':0}).status_code==403
+    assert c.post(root+'/latency/mine',json={'csrf':t}).status_code==403
 
 
 def test_draft_grants_are_checked_on_server_and_cannot_target_other_user(customer):
     c,m,root,t=customer
-    unlock(c,root,t)
     endpoint=root+'/draft'
     for attempted in [document(target='theirs'),document(node_ids=['other']),document(target='direct')]:
         result=c.post(endpoint,json={'csrf':t,'revision':0,'document':attempted})
@@ -99,12 +106,14 @@ def test_draft_grants_are_checked_on_server_and_cannot_target_other_user(custome
     assert ur.get_policy(m.DB,'v')['revision']==0
     assert c.post(endpoint,json={'csrf':t,'revision':0,'document':document()}).status_code==409
     assert c.post(endpoint,json={'csrf':t,'revision':True,'document':document()}).status_code==409
-    assert c.post('/s/token-v/routing/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==401
+    assert c.post('/s/token-v/routing/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==422
+    second=c.post('/s/token-v/routing/draft',json={'csrf':t,'revision':0,'document':document(target='theirs',node_ids=['other'])})
+    assert second.status_code==200
+    assert ur.get_policy(m.DB,'u')['revision']==1 and ur.get_policy(m.DB,'v')['revision']==1
 
 
 def test_apply_queue_discard_and_busy_are_explicit(customer):
     c,m,root,t=customer
-    unlock(c,root,t)
     saved=c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).json()
     revision=saved['policy']['revision']
     assert c.post(root+'/apply',json={'csrf':t,'revision':revision-1}).status_code==409
@@ -122,35 +131,42 @@ def test_apply_queue_discard_and_busy_are_explicit(customer):
     assert discarded.json()['policy']['draft']['rules'][0]['name']=='Example'
 
 
-def test_password_token_rotation_and_account_restrictions_invalidate_writes(customer):
+def test_token_rotation_account_restrictions_and_revocation_block_writes(customer):
     c,m,root,t=customer
-    unlock(c,root,t)
-    ur.configure_user(m.DB,'u',True,password='replacement-password')
-    assert c.get(root+'/api').json()['locked']
-    assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==401
-    unlock(c,root,t,'replacement-password')
     with connect(m.DB) as db:
         db.execute("UPDATE users SET token='new-token' WHERE id='u'")
     assert c.get(root+'/api').status_code==404
+    assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==404
     root='/s/new-token/routing'
-    assert c.get(root+'/api').json()['locked']
-    unlock(c,root,t,'replacement-password')
+    assert c.get(root+'/api').json()['editable']
     with connect(m.DB) as db:
         db.execute("UPDATE users SET enabled=0 WHERE id='u'")
     state=c.get(root+'/api').json()
-    assert not state['editable'] and state['reason']=='手动停用'
+    assert not state['locked'] and not state['editable'] and state['reason']=='手动停用'
     assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==403
     assert c.post(root+'/apply',json={'csrf':t,'revision':0}).status_code==403
     ur.configure_user(m.DB,'u',False)
     assert c.get(root+'/api').json()['locked']
 
 
+def test_expired_account_can_read_saved_rules_but_cannot_modify(customer):
+    c,m,root,t=customer
+    saved=c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()})
+    assert saved.status_code==200
+    with connect(m.DB) as db:
+        db.execute("UPDATE users SET expires=? WHERE id='u'",(int(time.time())-1,))
+    state=c.get(root+'/api').json()
+    assert not state['locked'] and not state['editable'] and state['reason']=='已到期'
+    assert state['policy']['draft']['rules'][0]['name']=='Example'
+    assert c.get(root+'/catalog').status_code==200
+    assert c.post(root+'/discard',json={'csrf':t,'revision':1}).status_code==403
+
+
 def test_rate_limits_size_limit_and_authorized_latency(customer,monkeypatch):
     c,m,root,t=customer
-    oversized=json.dumps({'csrf':t,'password':'x'*(257*1024)})
-    assert c.post(root+'/unlock',content=oversized,headers={'Content-Type':'application/json'}).status_code==413
-    assert c.post(root+'/unlock',content='[]').status_code==400
-    unlock(c,root,t)
+    oversized=json.dumps({'csrf':t,'document':'x'*(257*1024)})
+    assert c.post(root+'/draft',content=oversized,headers={'Content-Type':'application/json'}).status_code==413
+    assert c.post(root+'/draft',content='[]').status_code==400
     calls=[]
     monkeypatch.setattr(m.runtime,'control',lambda path:(calls.append(path) or {'delay':12}))
     assert c.post(root+'/latency/theirs',json={'csrf':t}).status_code==404
@@ -160,10 +176,8 @@ def test_rate_limits_size_limit_and_authorized_latency(customer,monkeypatch):
     assert 'up-mine' in calls[0]
     assert c.post(root+'/latency/mine',json={'csrf':t}).json()['delay']==12
     assert len(calls)==1
-    c.post(root+'/lock',json={'csrf':t})
-    for _ in range(7):
-        assert c.post(root+'/unlock',json={'csrf':t,'password':'wrong'}).status_code==422
-    assert c.post(root+'/unlock',json={'csrf':t,'password':'password-for-u'}).status_code==429
+    statuses=[c.post(root+'/latency/mine',json={'csrf':t}).status_code for _ in range(10)]
+    assert 429 in statuses and len(calls)==1
 
 
 def test_routing_subpage_precedes_subscription_catchall_and_prefixes(customer):
@@ -181,45 +195,50 @@ def test_routing_subpage_precedes_subscription_catchall_and_prefixes(customer):
     assert page.status_code==200 and '我的分流' in page.text
 
 
-def test_setting_session_expires_and_legacy_subscription_remains_ua_driven(customer,monkeypatch):
+def test_legacy_password_data_is_inert_and_subscription_remains_ua_driven(customer,monkeypatch):
     c,m,root,t=customer
-    unlock(c,root,t)
+    with connect(m.DB) as db:
+        db.execute("UPDATE user_routing SET password_hash='obsolete-hash',auth_revision=999 WHERE user_id='u'")
+    assert c.get(root+'/api').json()['editable']
     subscription=c.get('/s/token-u',headers={'User-Agent':'sing-box/1.14.3'})
     assert subscription.status_code==200 and subscription.headers['content-type'].startswith('application/json')
     assert subscription.headers['X-Subscription-Format']=='sing-box.json'
     browser=c.get('/s/token-u',headers={'User-Agent':'Mozilla/5.0','Accept':'text/html'})
     assert browser.status_code==200 and '我的分流' in browser.text
-    # The dedicated route must not be swallowed by /s/{token}/{format}.
     assert c.get(root,headers={'User-Agent':'sing-box/1.14.3'}).headers['content-type'].startswith('text/html')
     future=time.time()+7201
     monkeypatch.setattr('panel.customer_routing.time.time',lambda:future)
-    assert c.get(root+'/api').json()['locked']
-    assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==401
+    assert c.get(root+'/api').json()['editable']
+    assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==200
 
 
 @pytest.mark.parametrize('action',['draft','discard','apply'])
-def test_password_rotation_while_request_waits_for_core_lock_prevents_mutation(customer,monkeypatch,action):
+@pytest.mark.parametrize('revocation,expected',[('disable',403),('token',404)])
+def test_revocation_while_request_waits_for_core_lock_prevents_mutation(customer,monkeypatch,action,revocation,expected):
     c,m,root,t=customer
-    unlock(c,root,t)
     original=ur.save_draft(m.DB,'u',document(),0)
     lock=m.runtime.lock
 
-    class PasswordChangedBeforeLock:
+    class AuthorizationChangedBeforeLock:
         changed=False
 
         def __enter__(self):
             lock.acquire()
             if not self.changed:
                 self.changed=True
-                ur.configure_user(m.DB,'u',True,password='new-password-during-request')
+                if revocation=='disable':
+                    ur.configure_user(m.DB,'u',False)
+                else:
+                    with connect(m.DB) as db:
+                        db.execute("UPDATE users SET token='replaced-token' WHERE id='u'")
             return self
 
         def __exit__(self,*args):
             lock.release()
 
-    monkeypatch.setattr(m.runtime,'lock',PasswordChangedBeforeLock())
+    monkeypatch.setattr(m.runtime,'lock',AuthorizationChangedBeforeLock())
     response=c.post(root+'/'+action,json={'csrf':t,'revision':original['revision'],'document':document(name='Unauthorized change')})
-    assert response.status_code==401,response.text
+    assert response.status_code==expected,response.text
     current=ur.get_policy(m.DB,'u')
     assert current['draft']==original['draft'] and current['revision']==original['revision']
     assert current['status']=='draft'
@@ -228,7 +247,6 @@ def test_password_rotation_while_request_waits_for_core_lock_prevents_mutation(c
 @pytest.mark.skipif(not os.environ.get('SING_BOX'),reason='requires real core SRS matcher')
 def test_preview_matches_real_srs_but_never_exposes_private_admin_exit(customer,monkeypatch):
     c,m,root,t=customer
-    unlock(c,root,t)
     directory=m.DIRECTORY/'rule-sets'
     directory.mkdir(exist_ok=True)
     source=directory/'source.json'

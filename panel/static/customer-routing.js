@@ -9,7 +9,7 @@
   let state = JSON.parse($('routing-initial-state').textContent);
   let draft = copy(state.policy.draft || {enabled: true, rules: []});
   let generation = 0, savedGeneration = 0, saving = null, saveTimer, pollTimer, saveError = '', disposed = false;
-  let editorRule = null, editorChanged = false, editorPrevious = null, dragged = null, recovery = null;
+  let editorRule = null, editorChanged = false, editorPrevious = null, dragged = null;
   let valuePicker = null, targetPicker = null, previewPicker = null, previewNode = '', previewNodeSignature = '';
   const editor = $('routing-editor');
   const labels = new Map();
@@ -54,19 +54,17 @@
     try { data = await response.json(); } catch (_) { throw new Error('请求未完成，请稍后重试'); }
     if (!response.ok) {
       const message = typeof data.detail === 'string' ? data.detail : '操作未完成，请检查输入后重试';
-      if (response.status === 401 && !state.locked) {
-        recovery = {document: generation !== savedGeneration && !editor.open ? copy(draft) : null, editor: editor.open && editorChanged ? copy(editorRule) : null};
-        if (recovery.editor) {
-          recovery.editor.name = $('routing-rule-name').value;
-          if (!['geoip', 'geosite'].includes(recovery.editor.kind)) recovery.editor.values = $('routing-manual-values').value.split(/[\n,]+/).map(value => value.trim()).filter(Boolean);
-        }
-        clearTimeout(saveTimer);
-        await closeEditor(true);
+      if (response.status === 403 && !disposed) {
+        // Refresh permission/CSRF state after an administrator change without
+        // replaying the rejected mutation or discarding still-authorized edits.
         try {
           const fresh = await fetch(base + '/api', {credentials: 'same-origin', cache: 'no-store', signal: scope, headers: {'Accept': 'application/json'}});
-          if (fresh.ok) { generation = savedGeneration = 0; acceptState(await fresh.json()); }
+          if (fresh.ok) {
+            const next = await fresh.json();
+            if (!next.policy.allowed) { clearTimeout(saveTimer); await closeEditor(true); generation = savedGeneration = 0; saveError = ''; }
+            acceptState(next, !!next.policy.allowed && generation !== savedGeneration);
+          }
         } catch (_) {}
-        $('routing-password').focus();
       }
       const error = new Error(message); error.status = response.status;
       throw error;
@@ -131,7 +129,7 @@
   }
   function renderStatus() {
     const pending = busy(), hasChanges = changed();
-    let status = state.locked ? '设置已锁定' : !state.policy.allowed ? '暂未开放' : pending ? (state.policy.status === 'queued' ? '等待应用' : '应用中') : saveError ? '草稿未保存' : state.policy.status === 'failed' ? '应用失败' : hasChanges ? '未应用更改' : draft.enabled ? '已生效' : '跟随管理员';
+    let status = !state.policy.allowed ? '暂未开放' : !state.editable ? '只读' : pending ? (state.policy.status === 'queued' ? '等待应用' : '应用中') : saveError ? '草稿未保存' : state.policy.status === 'failed' ? '应用失败' : hasChanges ? '未应用更改' : draft.enabled ? '已生效' : '跟随管理员';
     $('routing-status').textContent = status;
     $('routing-status').dataset.state = saveError ? 'error' : state.policy.status;
     $('routing-savebar').hidden = state.locked || (!hasChanges && !pending && state.policy.status !== 'failed');
@@ -150,15 +148,12 @@
     closeMenus(); renderStatus();
     const editable = canEdit();
     $('routing-rule-count').textContent = draft.rules.filter(rule => rule.enabled).length + ' / ' + draft.rules.length;
-    $('routing-add').disabled = !editable || draft.rules.length >= state.policy.max_rules;
+    $('routing-add').disabled = !editable || draft.rules.length >= (state.policy.max_rules ?? 6);
     root.querySelectorAll('[data-routing-add]').forEach(node => node.disabled = !editable || !(state.outbounds || []).some(out => out.usable));
     $('routing-enable').disabled = !editable;
     $('routing-enable').setAttribute('aria-checked', String(!!draft.enabled));
-    $('routing-lock').hidden = state.locked || !state.policy.allowed;
-    $('routing-unlock-panel').hidden = !state.locked;
-    $('routing-unlock-form').hidden = !state.can_unlock;
-    $('routing-access-title').textContent = state.can_unlock ? '解锁分流设置' : '分流设置尚未开放';
-    $('routing-access-description').textContent = state.can_unlock ? '使用独立设置密码，管理你的分流规则。' : state.reason || '请联系管理员开启自定义分流。';
+    $('routing-access-panel').hidden = !!state.policy.allowed;
+    $('routing-access-description').textContent = state.reason || '请联系管理员开启自定义分流。';
     const notices = [];
     if (state.reason && !state.locked) notices.push(state.reason);
     if (state.policy.status === 'failed' && state.policy.error) notices.push(state.policy.error);
@@ -192,7 +187,7 @@
         const addAction = (label, action, disabled, danger = false) => { const item = button(label, danger ? 'routing-delete' : '', () => { closeMenus(); action(); }, disabled); item.setAttribute('role', 'menuitem'); menu.append(item); };
         addAction('上移', () => moveRule(rule.id, -1), index === 0);
         addAction('下移', () => moveRule(rule.id, 1), index === draft.rules.length - 1);
-        addAction('复制规则', () => { const duplicate = copy(rule); duplicate.id = ''; duplicate.name = rule.name.slice(0, 74) + ' 副本'; openEditor(duplicate); }, draft.rules.length >= state.policy.max_rules);
+        addAction('复制规则', () => { const duplicate = copy(rule); duplicate.id = ''; duplicate.name = rule.name.slice(0, 74) + ' 副本'; openEditor(duplicate); }, draft.rules.length >= (state.policy.max_rules ?? 6));
         addAction('删除规则', async () => { if (await window.panelConfirm('删除“' + rule.name + '”？应用更改后生效。', '删除规则')) mutate(() => { draft.rules = draft.rules.filter(item => item.id !== rule.id); }); }, false, true);
         row.append(menu); menu.querySelector('button:not(:disabled)')?.focus();
       }, !editable); more.setAttribute('aria-label', rule.name + ' 更多操作'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
@@ -211,7 +206,7 @@
     const container = $('routing-egresses'); container.replaceChildren();
     const outs = state.outbounds || [];
     $('routing-egress-count').textContent = state.locked ? '' : outs.filter(out => out.usable).length + ' 个可用';
-    if (!outs.length) { container.append(el('p', 'routing-footnote', state.locked ? '解锁设置后查看已授权出口。' : '管理员尚未授权出口。')); return; }
+    if (!outs.length) { container.append(el('p', 'routing-footnote', state.locked ? '管理员开启自定义分流后，可查看已授权出口。' : '管理员尚未授权出口。')); return; }
     for (const out of outs) {
       const row = el('div', 'routing-egress-row');
       const info = el('div', 'routing-egress-description'); info.append(el('strong', '', out.name));
@@ -453,26 +448,6 @@
     $('routing-apply').disabled = true;
     try { await flushDraft(); const next = await api('/apply', {revision: state.policy.revision}); acceptState(next); window.panelToast('已提交应用，正在更新配置'); }
     catch (error) { if (!disposed) { window.panelToast(error.message, true); render(); } }
-  });
-  listen($('routing-unlock-form'), 'submit', async event => {
-    event.preventDefault(); const submit = event.submitter; submit.disabled = true; $('routing-unlock-error').hidden = true;
-    try {
-      const next = await api('/unlock', {password: $('routing-password').value}); $('routing-password').value = ''; generation = savedGeneration = 0; saveError = ''; acceptState(next); window.panelToast('设置已解锁'); $('routing-add').focus();
-      if (recovery && canEdit()) {
-        const previous = recovery; recovery = null;
-        if ((previous.document || previous.editor) && await window.panelConfirm('上次有未保存的编辑，恢复后请检查规则再应用。', '恢复编辑')) {
-          if (previous.document) { draft = previous.document; markChanged(); }
-          if (previous.editor) { openEditor(previous.editor); editorChanged = true; }
-        }
-      }
-    }
-    catch (error) { if (!disposed) { $('routing-unlock-error').textContent = error.message; $('routing-unlock-error').hidden = false; } }
-    finally { submit.disabled = false; }
-  });
-  listen($('routing-lock'), 'click', async () => {
-    if (!(await closeEditor())) return;
-    try { await flushDraft(); const next = await api('/lock', {}); generation = savedGeneration = 0; acceptState(next); $('routing-password').focus(); }
-    catch (error) { if (!disposed) window.panelToast(error.message, true); }
   });
   listen($('routing-preview-form'), 'submit', async event => {
     event.preventDefault(); const submit = event.submitter, result = $('routing-preview-result'); submit.disabled = true; result.hidden = false; result.classList.remove('is-error'); result.textContent = '正在检查匹配…';
