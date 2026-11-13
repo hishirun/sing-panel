@@ -1,0 +1,241 @@
+"""Customer-only routing endpoints. Share credentials never grant write access."""
+import hashlib
+import hmac
+import json
+import threading
+import time
+from urllib.parse import quote
+
+from argon2.exceptions import VerificationError, InvalidHashError
+from fastapi import HTTPException, Request
+from starlette.concurrency import run_in_threadpool
+
+from .core import connect, records, reason
+from .sharing import read_settings
+from . import routing, user_routing as ur
+
+SERVICE_NAMES = {'category-ai-!cn':'海外 AI 服务','openai':'OpenAI','anthropic':'Claude / Anthropic',
+    'google':'Google 谷歌','github':'GitHub','telegram':'Telegram','netflix':'Netflix 奈飞',
+    'youtube':'YouTube','apple':'Apple 苹果','microsoft':'Microsoft 微软','cn':'中国站点',
+    'geolocation-cn':'中国站点','geolocation-!cn':'海外站点','category-ads-all':'广告与追踪',
+    'category-games':'游戏','category-social-media-!cn':'海外社交媒体','spotify':'Spotify','disney':'Disney+'}
+REGION_NAMES = {'cn':'中国','us':'美国','jp':'日本','hk':'香港','tw':'台湾','sg':'新加坡','kr':'韩国',
+    'gb':'英国','de':'德国','fr':'法国','ca':'加拿大','au':'澳大利亚','nl':'荷兰','ru':'俄罗斯',
+    'in':'印度','tr':'土耳其','br':'巴西','my':'马来西亚','th':'泰国','id':'印度尼西亚','vn':'越南',
+    'ph':'菲律宾','it':'意大利','es':'西班牙','ch':'瑞士','se':'瑞典','fi':'芬兰','no':'挪威'}
+
+
+def install(app, m):
+    limits = {}
+    rate_lock = threading.Lock()
+    preview_gate = threading.BoundedSemaphore(2)
+    preview_users = set()
+
+    def limited(key, count, window):
+        now = time.monotonic()
+        with rate_lock:
+            for k in list(limits):
+                limits[k] = [t for t in limits[k] if now-t < 600]
+                if not limits[k]:
+                    del limits[k]
+            hits = [t for t in limits.get(key, []) if now-t < window]
+            if len(hits) >= count:
+                raise HTTPException(429, '操作过于频繁，请稍后再试')
+            limits[key] = hits + [now]
+
+    def identity(request, token, require_unlock=False, write=False):
+        user = m.subscription_user(token)
+        policy = ur.get_policy(m.DB, user['id'])
+        auth = request.session.get('customer_routing', {})
+        unlocked = (auth.get('uid') == user['id'] and auth.get('revision') == policy['auth_revision']
+                    and auth.get('until', 0) > time.time()
+                    and hmac.compare_digest(str(auth.get('token', '')), hashlib.sha256(token.encode()).hexdigest()))
+        if require_unlock and (not unlocked or not policy['allowed']):
+            raise HTTPException(401, '请先解锁分流设置')
+        if write and (not policy['allowed'] or reason(user)):
+            raise HTTPException(403, reason(user) or '管理员尚未开启自定义分流')
+        return user, policy, unlocked
+
+    async def body(request):
+        chunks = bytearray()
+        async for chunk in request.stream():
+            chunks.extend(chunk)
+            if len(chunks) > 256*1024:
+                raise HTTPException(413, '分流配置过大')
+        try:
+            value = json.loads(chunks)
+        except (ValueError, UnicodeError):
+            raise HTTPException(400, '请求格式无效')
+        if not isinstance(value, dict):
+            raise HTTPException(400, '请求格式无效')
+        m.csrf(request, str(value.get('csrf', '')))
+        return value
+
+    def state(request, token):
+        user, policy, unlocked = identity(request, token)
+        settings = read_settings(m.DB)
+        root = (settings['public_url'] or str(request.base_url).rstrip('/')) + settings['share_path'] + '/' + token
+        request.session.setdefault('csrf', m.secrets.token_urlsafe(32))
+        can_unlock = bool(policy['allowed'] and policy['password_hash'])
+        unlocked = unlocked and can_unlock
+        safe = {key:policy[key] for key in ('allowed','max_rules','revision','applied_revision','status','error','applied_at')}
+        safe['draft'] = policy['draft'] if unlocked else {'enabled':False,'rules':[]}
+        data = routing.load(m.DB)
+        members = {x['node_id'] for x in records(m.DB,'memberships') if x['user_id'] == user['id']}
+        nodes = []
+        for node in records(m.DB,'nodes'):
+            if node['id'] not in members:
+                continue
+            locked = any(r.get('enabled') and r.get('priority','forced') != 'default' and not r.get('match')
+                         and (not r.get('node_ids') or node['id'] in r['node_ids']) for r in data['rules'])
+            nodes.append({'id':node['id'],'name':node['name'],'locked':locked,'enabled':bool(node['enabled'])})
+        outs = [{**out,'usable':out['selectable'],**out['latency']} for out in ur.public_outbounds(m.DB,user,data)] if unlocked else []
+        # Mark references that were revoked without revealing private metadata.
+        usable = {out['id'] for out in outs if out['usable']}
+        if unlocked:
+            safe['draft'] = json.loads(json.dumps(safe['draft']))
+            for rule in safe['draft']['rules']:
+                if rule['target'] != 'reject' and rule['target'] not in usable:
+                    rule['unavailable'] = True
+        why = reason(user) or ('' if policy['allowed'] else '管理员尚未开启自定义分流')
+        return {'csrf':request.session['csrf'],'share_url':root,'locked':not unlocked,
+                'editable':bool(unlocked and not why),'reason':why,'can_unlock':can_unlock,
+                'policy':safe,'outbounds':outs,'nodes':nodes if unlocked else []}
+
+    def busy(policy):
+        if policy['status'] in ('queued','applying'):
+            raise HTTPException(409, '正在应用，请完成后再修改')
+
+    def convert(error):
+        return HTTPException(409 if isinstance(error, ur.RevisionConflict) else 422, str(error))
+
+    @app.get('/s/{token}/routing')
+    def page(request:Request, token:str):
+        user = m.subscription_user(token)
+        data = state(request, token)
+        return m.render(request,'customer_routing.html',user={'name':user['name']},
+                        share_url=data['share_url'],routing_state=data)
+
+    @app.get('/s/{token}/routing/api')
+    def api(request:Request, token:str):
+        return state(request, token)
+
+    @app.post('/s/{token}/routing/unlock')
+    async def unlock(request:Request, token:str):
+        raw = await body(request)
+        user, policy, _ = identity(request, token)
+        if not policy['allowed'] or not policy['password_hash']:
+            raise HTTPException(403, '管理员尚未开启自定义分流')
+        limited(('unlock',user['id'],request.client.host), 8, 300)
+        password = raw.get('password')
+        if not isinstance(password,str) or len(password)>255:
+            raise HTTPException(422, '设置密码不正确')
+        try:
+            await run_in_threadpool(m.ph.verify, policy['password_hash'], password)
+        except (VerificationError,InvalidHashError):
+            raise HTTPException(422, '设置密码不正确')
+        # Recheck after the expensive hash in case the admin revoked access.
+        current = ur.get_policy(m.DB,user['id'])
+        if not current['allowed'] or current['auth_revision'] != policy['auth_revision']:
+            raise HTTPException(403, '设置权限已更新，请重试')
+        request.session['customer_routing'] = {'uid':user['id'],'revision':policy['auth_revision'],
+            'until':int(time.time())+7200,'token':hashlib.sha256(token.encode()).hexdigest()}
+        return state(request, token)
+
+    @app.post('/s/{token}/routing/lock')
+    async def lock(request:Request, token:str):
+        await body(request)
+        identity(request, token)
+        request.session.pop('customer_routing', None)
+        return state(request, token)
+
+    @app.post('/s/{token}/routing/draft')
+    async def draft(request:Request, token:str):
+        raw = await body(request)
+        user, _, _ = identity(request, token, True, True)
+        def save():
+            with m.runtime.lock:
+                identity(request, token, True, True)
+                ur.save_draft(m.DB,user['id'],raw.get('document'),raw.get('revision'))
+        try:
+            await run_in_threadpool(save)
+        except ValueError as error:
+            raise convert(error)
+        return state(request, token)
+
+    @app.post('/s/{token}/routing/discard')
+    async def discard(request:Request, token:str):
+        raw = await body(request)
+        user, _, _ = identity(request, token, True, True)
+        def restore():
+            with m.runtime.lock, connect(m.DB) as db:
+                identity(request, token, True, True)
+                db.execute('BEGIN IMMEDIATE')
+                policy = db.execute('SELECT * FROM user_routing WHERE user_id=?', (user['id'],)).fetchone()
+                busy(policy)
+                if type(raw.get('revision')) is not int or raw['revision'] != policy['revision']:
+                    raise HTTPException(409, '规则已在其他页面更新，请刷新后重试')
+                db.execute("UPDATE user_routing SET draft=applied,revision=revision+1,applied_revision=revision+1,status='applied',error='' WHERE user_id=?", (user['id'],))
+        await run_in_threadpool(restore)
+        return state(request, token)
+
+    @app.post('/s/{token}/routing/apply')
+    async def apply(request:Request, token:str):
+        raw = await body(request)
+        user, _, _ = identity(request, token, True, True)
+        if type(raw.get('revision')) is not int:
+            raise HTTPException(422, '页面版本无效')
+        try:
+            def enqueue():
+                with m.runtime.lock:
+                    identity(request, token, True, True)
+                    return m.routing_publisher.enqueue(user['id'],raw['revision'])
+            await run_in_threadpool(enqueue)
+        except ValueError as error:
+            raise convert(error)
+        return state(request, token)
+
+    @app.get('/s/{token}/routing/catalog')
+    def catalog(request:Request, token:str, kind:str='geosite', q:str='', offset:int=0):
+        identity(request, token, True)
+        if kind not in ('geoip','geosite') or len(q)>100 or not 0<=offset<=5000:
+            raise HTTPException(422, '查询条件无效')
+        labels = SERVICE_NAMES if kind=='geosite' else REGION_NAMES
+        items = [{'value':value,'label':labels.get(value,value.upper() if kind=='geoip' else value)} for value in routing.GEO_CATALOG[kind]]
+        items.sort(key=lambda item:(item['value'] not in labels,item['label']))
+        query=q.strip().lower()
+        items=[item for item in items if query in (item['label']+' '+item['value']).lower()]
+        return {'items':items[offset:offset+80],'total':len(items),'offset':offset,'has_more':offset+80<len(items)}
+
+    @app.post('/s/{token}/routing/latency/{identity_id}')
+    async def latency(request:Request, token:str, identity_id:str):
+        await body(request)
+        user, policy, _ = identity(request, token, True, True)
+        limited(('latency',user['id']), 8, 60)
+        from .latency import probe, cached
+        out=next((out for out in routing.load(m.DB)['outbounds'] if out['id']==identity_id and ur.allowed_outbound(out,user,policy)),None)
+        if out is None:
+            raise HTTPException(404, '出口不可用或未授权')
+        previous=cached(m.DB,out)
+        if time.time()-previous.get('checked_at',0)<30:
+            return {key:previous[key] for key in ('delay','checked_at') if key in previous}
+        return await run_in_threadpool(probe,m.DB,m.runtime,out)
+
+    @app.post('/s/{token}/routing/preview')
+    async def preview(request:Request, token:str):
+        raw=await body(request)
+        user, policy, _=identity(request, token, True)
+        limited(('preview',user['id']),10,60)
+        with rate_lock:
+            if user['id'] in preview_users or not preview_gate.acquire(blocking=False):
+                raise HTTPException(429,'正在计算匹配结果，请稍后再试')
+            preview_users.add(user['id'])
+        from .routing_preview import preview as calculate
+        try:
+            return await run_in_threadpool(calculate,m,user,policy,raw.get('destination'),raw.get('node_id'))
+        except ValueError as error:
+            raise HTTPException(422,str(error))
+        finally:
+            with rate_lock:
+                preview_users.discard(user['id'])
+                preview_gate.release()

@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block content %}
+<header><div><h1>{{ user.name }} · 分流设置</h1><p class="muted">授权出口与个人规则，独立于用户的共享额度。</p></div><a class="button" href="{{ admin_path }}/users">返回用户管理</a></header>
+{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+{% if notice %}<div class="good" role="status">{{ notice }}</div>{% endif %}
+<div class="grid"><div>
+<section><h2>自定义分流权限</h2>
+<form method="post" action="{{ admin_path }}/users/{{ user.id }}/routing">
+<input name="token" type="hidden" value="{{ csrf }}">
+<div class="checks"><label><input type="checkbox" name="allowed" value="1" {{ 'checked' if values.allowed else '' }}>允许用户配置自己的分流规则</label></div>
+<div class="formgrid"><label>规则数量上限<input name="max_rules" type="number" min="1" max="50" required value="{{ values.max_rules }}"></label><label>{{ '重设分流密码' if policy.has_password else '分流设置密码' }}<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" placeholder="{{ '留空保留当前密码' if policy.has_password else '至少 12 个字符，单独告知用户' }}"></label></div>
+<p class="muted">分享链接用于查看与订阅；修改分流需要此密码。重设密码会锁定已有的用户编辑会话。</p>
+<div class="actions"><button class="primary" {{ 'disabled' if policy.status in ['queued','applying'] else '' }}>保存权限</button><a class="button" href="{{ share_path }}/{{ user.token }}/routing" target="_blank" rel="noreferrer">打开用户分流页</a></div>
+</form></section>
+<section><div class="rowhead"><h2>用户可见出口 <small>{{ exits|length }}</small></h2><a class="button" href="{{ admin_path }}/routing">配置出口授权</a></div>
+<div class="table-wrap"><table><thead><tr><th>出口</th><th>地区 / 用途</th><th>使用权限</th></tr></thead><tbody>{% for out in exits %}<tr><td><strong>{{ out.name }}</strong></td><td>{{ out.region or '—' }}<br><small>{{ out.description }}</small></td><td><span class="status {{ 'good' if out.selectable else 'bad' }}">{{ '可用于分流' if out.selectable else '仅查看 / 不可用' }}</span></td></tr>{% else %}<tr><td colspan="3" class="empty">暂无可见出口，请先在出口编辑页设置授权。</td></tr>{% endfor %}</tbody></table></div></section>
+<section><div class="rowhead"><h2>已应用规则 <small>{{ policy.applied.rules|length }}</small></h2><span class="pill">{{ '启用' if policy.applied.enabled else '跟随管理员' }}</span></div>
+<div class="table-wrap"><table><thead><tr><th>顺序 / 名称</th><th>匹配内容</th><th>使用出口</th><th>状态</th></tr></thead><tbody>{% for rule in policy.applied.rules %}<tr><td>{{ loop.index }} · {{ rule.name }}</td><td><small>{{ {'geosite':'网站与服务','geoip':'目标 IP 地区','domain_suffix':'域名后缀','ip_cidr':'IP / CIDR'}.get(rule.kind,rule.kind) }}</small><br>{{ rule['values']|join('、') }}</td><td>{{ targets.get(rule.target,'出口已移除') }}</td><td>{{ '启用' if rule.enabled else '停用' }}</td></tr>{% else %}<tr><td colspan="4" class="empty">当前跟随管理员默认分流。</td></tr>{% endfor %}</tbody></table></div></section>
+</div><aside><section><h2>应用状态</h2><p><span class="status {{ 'bad' if policy.status=='failed' else 'good' }}">{{ {'applied':'已生效','draft':'有未应用更改','queued':'等待应用','applying':'正在应用','failed':'应用失败'}.get(policy.status,policy.status) }}</span></p><p class="muted">当前版本 {{ policy.applied_revision }} · 草稿版本 {{ policy.revision }}</p>{% if policy.applied_at %}<small>{{ policy.applied_at|datetime }}</small>{% endif %}{% if policy.error %}<p class="alert">{{ policy.error }}</p>{% endif %}</section>
+<section><h2>恢复默认</h2><p class="muted">清空个人规则和草稿，恢复管理员分流。保留出口授权与设置密码。</p><form method="post" action="{{ admin_path }}/users/{{ user.id }}/routing" data-confirm="清空此用户的个人规则与草稿，恢复管理员默认分流？"><input name="token" type="hidden" value="{{ csrf }}"><button name="intent" value="reset" {{ 'disabled' if policy.status in ['queued','applying'] else '' }}>恢复默认分流</button></form></section></aside></div>
+{% endblock %}

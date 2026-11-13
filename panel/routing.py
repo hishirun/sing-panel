@@ -263,24 +263,32 @@ def compile_into(document,settings):
         document.setdefault('experimental',{}).setdefault('cache_file',{})['enabled']=True
     return document
 
-def prepare_rule_sets(document,directory,binary):
+def prepare_rule_sets(document,directory,binary,max_seconds=120):
     """Seed remote rules before applying; a failed download never changes routing."""
-    import os,subprocess,tempfile
+    import os,subprocess,tempfile,time
     from urllib.request import urlopen
     set_rule_paths(document,directory)
     directory=Path(directory)/'rule-sets';directory.mkdir(mode=0o700,exist_ok=True)
+    deadline=time.monotonic()+max_seconds
     for entry in document.get('route',{}).get('rule_set',[]):
         destination=directory/(entry['tag']+'.srs')
         entry['initial_path']=str(destination)
         if destination.exists():continue
         temporary=None
         try:
-            with urlopen(entry['url'],timeout=15) as response:
-                data=response.read(32*1024*1024+1)
-            if len(data)>32*1024*1024:raise ValueError('规则集文件过大')
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise ValueError('规则集加载超时')
+            with urlopen(entry['url'],timeout=min(15,remaining)) as response:
+                data=bytearray()
+                while True:
+                    chunk=response.read(64*1024)
+                    if not chunk:break
+                    data.extend(chunk)
+                    if len(data)>32*1024*1024:raise ValueError('规则集文件过大')
+                    if time.monotonic()>deadline:raise ValueError('规则集加载超时')
             with tempfile.NamedTemporaryFile(dir=directory,delete=False) as f:
                 temporary=Path(f.name);f.write(data)
-            result=subprocess.run([binary,'rule-set','decompile',str(temporary),'-o',os.devnull],capture_output=True,timeout=15)
+            result=subprocess.run([binary,'rule-set','decompile',str(temporary),'-o',os.devnull],capture_output=True,timeout=max(.05,min(15,deadline-time.monotonic())))
             if result.returncode:raise ValueError('规则集格式校验失败')
             temporary.replace(destination)
         except Exception as exc:raise ValueError('无法加载规则集 '+entry['tag']+'，设置未保存，请稍后重试') from exc

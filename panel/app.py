@@ -50,9 +50,12 @@ attempts = {}
 async def lifespan(app):
     if not AUTH.exists():
         raise RuntimeError('Run python -m panel.setup to create administrator credentials first')
+    routing_publisher.recover()
     runtime.start()
+    routing_publisher.start()
     monitor.start()
     yield
+    routing_publisher.stop()
     monitor.stop()
     runtime.stop()
 
@@ -455,6 +458,13 @@ def customer_psk(request: Request, token: str, csrf_token: str=Form(...), psk: s
         db.execute('UPDATE users SET secret=? WHERE id=?',(psk,user['id']))
         db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,str(time.time())))
     return RedirectResponse('/s/'+token+'?changed=true',status_code=303)
+
+# Customer subpages must precede the legacy one-segment subscription format.
+import sys
+from .routing_publish import Publisher
+from .customer_routing import install as install_customer_routing
+routing_publisher = Publisher(sys.modules[__name__])
+install_customer_routing(app, sys.modules[__name__])
 
 @app.get('/s/{token}/{format}')
 def subscription(request: Request, token: str, format: str):

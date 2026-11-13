@@ -61,6 +61,8 @@ def init_db(path):
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_member_port ON memberships(port) WHERE port>0')
         from .management import migrate
         migrate(db)
+        from .user_routing import migrate as migrate_user_routing
+        migrate_user_routing(db)
 
 def records(path, table):
     if table not in ('nodes','users','memberships'):
@@ -120,8 +122,9 @@ def current_config(path, stats_port=19090):
         db.execute('BEGIN')
         rows = [[dict(r) for r in db.execute(f'SELECT * FROM {t} ORDER BY rowid')]
                 for t in ('nodes','users','memberships')]
-    from .routing import load, compile_into, set_rule_paths
-    document=compile_into(config(*rows,stats_port),load(path))
+    from .routing import set_rule_paths
+    from .user_routing import compose
+    document=compose(config(*rows,stats_port),path)
     return set_rule_paths(document,Path(path).parent)
 
 def account(path, epoch, counters, day=None):

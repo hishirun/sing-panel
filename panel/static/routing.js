@@ -13,6 +13,7 @@
     form.querySelectorAll('[data-up-reality]').forEach(el=>{el.hidden=tls.value!=='reality';});
     form.querySelectorAll('[data-up-path]').forEach(el=>{el.hidden=!['ws','httpupgrade'].includes(transport.value);});
     form.querySelectorAll('[data-up-grpc]').forEach(el=>{el.hidden=transport.value!=='grpc';});
+    form.querySelectorAll('[data-public-selected]').forEach(el=>{el.hidden=form.elements.namedItem('public_audience')?.value!=='selected';});
   };
   form.addEventListener('change',refresh);refresh();
 })();
