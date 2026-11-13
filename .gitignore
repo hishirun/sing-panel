@@ -5,3 +5,4 @@ data/
 reference/
 *.pyc
 .env
+agent-cores/

@@ -63,12 +63,26 @@ def init_db(path):
         migrate(db)
         from .user_routing import migrate as migrate_user_routing
         migrate_user_routing(db)
+        if 'server_id' not in {r[1] for r in db.execute('PRAGMA table_info(nodes)')}:
+            db.execute("ALTER TABLE nodes ADD COLUMN server_id TEXT NOT NULL DEFAULT 'local'")
+        from .fleet import migrate as migrate_fleet
+        migrate_fleet(db)
+        from .server_traffic import migrate as migrate_server_traffic
+        migrate_server_traffic(db)
 
 def records(path, table):
     if table not in ('nodes','users','memberships'):
         raise ValueError(table)
     with connect(path) as db:
-        return [dict(r) for r in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+        result = [dict(r) for r in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+        if table == 'nodes':
+            servers = {r['id']: dict(r) for r in db.execute('SELECT id,name,host,enabled FROM servers')}
+            for node in result:
+                remote = servers.get(node.get('server_id', 'local'))
+                node['server_host'] = remote['host'] if remote else ''
+                node['server_name_label'] = remote['name'] if remote else '本机'
+                node['server_enabled'] = bool(remote['enabled']) if remote else node.get('server_id','local') == 'local'
+        return result
 
 def reason(row, now=None):
     now = time.time() if now is None else now
@@ -117,39 +131,53 @@ def config(nodes, users, memberships, stats_port=19090):
             'experimental': {'v2ray_api': {'listen': f'127.0.0.1:{stats_port}',
                 'stats': {'enabled': True, 'users': [entry['name'] for inbound in inbounds for entry in inbound.get('users',[])], 'inbounds':compat_tags}}}}
 
-def current_config(path, stats_port=19090):
+def current_config(path, stats_port=19090, server_id='local'):
     with connect(path) as db:
         db.execute('BEGIN')
         rows = [[dict(r) for r in db.execute(f'SELECT * FROM {t} ORDER BY rowid')]
                 for t in ('nodes','users','memberships')]
+    rows[0] = [node for node in rows[0] if node.get('server_id','local') == server_id]
+    selected = {node['id'] for node in rows[0]}
+    rows[2] = [member for member in rows[2] if member['node_id'] in selected]
+    from .server_traffic import summary
+    if summary(path,server_id).get('blocked'):
+        rows[0]=[];rows[2]=[]
     from .routing import set_rule_paths
     from .user_routing import compose
     document=compose(config(*rows,stats_port),path)
     return set_rule_paths(document,Path(path).parent)
 
-def account(path, epoch, counters, day=None):
+def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=False, observed_at=None):
     """Atomic and idempotent; never reset the remote counter."""
-    hour=time.strftime('%Y-%m-%dT%H:00',time.gmtime())
-    day = day or time.strftime('%Y-%m-%d', time.gmtime())
+    stamp=time.time() if observed_at is None else min(time.time(),float(observed_at))
+    hour=time.strftime('%Y-%m-%dT%H:00',time.gmtime(stamp))
+    day = day or time.strftime('%Y-%m-%d', time.gmtime(stamp))
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
         for counter, value in counters.items():
             parts = counter.split('>>>')
             if len(parts)!=4 or parts[0] not in ('user','inbound') or parts[2]!='traffic':
                 continue
-            if parts[3] not in ('uplink','downlink') or value<0:
+            if parts[3] not in ('uplink','downlink') or isinstance(value,bool) or not isinstance(value,int) or not 0 <= value <= 2**63-1:
                 continue
             if parts[0]=='inbound' and ':' not in parts[1]:
                 continue
             user = parts[1].split(':')[-1]
             node_id=parts[1].rsplit(':',1)[0] if ':' in parts[1] else None
+            if server_id is not None:
+                owner=db.execute('SELECT server_id FROM nodes WHERE id=?',(node_id,)).fetchone()
+                if not owner or owner['server_id'] != server_id:
+                    continue
             if not db.execute('SELECT 1 FROM users WHERE id=?',(user,)).fetchone():
                 continue
             previous = db.execute('SELECT value FROM samples WHERE epoch=? AND counter=?',(epoch,counter)).fetchone()
             if previous and value<previous[0]:
+                if ignore_stale:
+                    continue
                 raise ValueError('counter regressed inside one core epoch')
             delta = value-(previous[0] if previous else 0)
             if delta>0:
+                db.execute('UPDATE users SET last_seen=? WHERE id=?',(int(time.time()),user))
                 row=db.execute('SELECT policy,activated_at FROM users WHERE id=?',(user,)).fetchone()
                 policy=json.loads(row['policy'])
                 if policy.get('first_use_days') and not row['activated_at']:
@@ -195,7 +223,7 @@ def port_available(port):
 
 def random_port(db, reserved_ports=()):
     used = {r[0] for r in db.execute('SELECT port FROM nodes UNION SELECT port FROM memberships')}
-    used.update((18889, 19090, 19091, *reserved_ports))
+    used.update((18889, 19090, 19091, 19190, 19191, *reserved_ports))
     candidates = list(set(range(20000, 65001)) - used)
     secrets.SystemRandom().shuffle(candidates)
     for port in candidates:

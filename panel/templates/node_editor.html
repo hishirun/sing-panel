@@ -3,12 +3,13 @@
 {% block content %}
 <header><h1>{{ '编辑节点 · '+values.name if node else '创建节点' }}</h1><a class="button" href="{{ admin_path }}/nodes">返回节点列表</a></header>
 <p class="muted">保存时校验配置，生效时连接会短暂重连。</p>
-{% if not node %}<div class="protocol-picker">{% for key,label,hint in [('snell6','Snell v6','TCP · PSK'),('snell5','Snell v5','TCP · PSK'),('reality','VLESS Reality','TCP · UUID'),('hysteria2','Hysteria2','QUIC · UDP'),('anytls','AnyTLS','TCP · TLS')] %}<a class="protocol-choice {{ 'selected' if values.protocol==key else '' }}" href="{{ admin_path }}/nodes/new?protocol={{ key }}"><strong>{{ label }}</strong><small>{{ hint }}</small></a>{% endfor %}</div>{% endif %}
+{% if not node %}<div class="protocol-picker">{% for key,label,hint in [('snell6','Snell v6','TCP · PSK'),('snell5','Snell v5','TCP · PSK'),('reality','VLESS Reality','TCP · UUID'),('hysteria2','Hysteria2','QUIC · UDP'),('anytls','AnyTLS','TCP · TLS')] %}<a class="protocol-choice {{ 'selected' if values.protocol==key else '' }}" href="{{ admin_path }}/nodes/new?protocol={{ key }}&amp;server_id={{ values.server_id|default('local')|urlencode }}"><strong>{{ label }}</strong><small>{{ hint }}</small></a>{% endfor %}</div>{% endif %}
 {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 {% if notice %}<section class="good" role="status">{{ notice }}</section>{% endif %}
 <form method="post" action="{{ admin_path }}{{ '/nodes/'+node.id+'/edit' if node else '/nodes' }}">
 <input type="hidden" name="token" value="{{ csrf }}"><input type="hidden" name="protocol" value="{{ values.protocol }}">
 <div class="grid"><div><section><h2>基本设置</h2><div class="formgrid">
+<label>所属服务器<select name="{{ 'server_display' if node else 'server_id' }}" {{ 'disabled' if node else '' }}>{% for server in servers|default([{'id':'local','name':'本机','host':''}]) %}<option value="{{ server.id }}" {{ 'selected' if server.id==(values.server_id|default('local')) else '' }}>{{ server.name }}{{ ' · '+server.host if server.host else '' }}</option>{% endfor %}</select>{% if node %}<input type="hidden" name="server_id" value="{{ values.server_id|default('local') }}">{% endif %}</label>
 <label>节点名称<input name="name" value="{{ values.name }}" maxlength="80" required></label>
 <label>监听端口（留空自动随机）<input type="number" name="port" value="{{ values.port }}" min="1024" max="65535" placeholder="自动分配 20000–65000"></label>
 <label>客户端连接地址（留空使用服务器 IP）<input name="connect_host" value="{{ values.connect_host }}" placeholder="直连 IP 或域名，不走小黄云"></label><label>监听 IP<input name="listen" value="{{ values.listen }}" required></label>

@@ -8,10 +8,10 @@ def outbounds(user,nodes,memberships,host):
     allowed={m['node_id']:m for m in memberships if m['user_id']==user['id']}
     result=[]
     for n in nodes:
-        if not n['enabled'] or n['id'] not in allowed:
+        if not n['enabled'] or not n.get('server_enabled',True) or n['id'] not in allowed:
             continue
         o=options(n)
-        out={'tag':n['name'],'server':o['connect_host'] or host,'server_port':n['port']}
+        out={'tag':n['name'],'server':o['connect_host'] or n.get('server_host') or host,'server_port':n['port']}
         if n['protocol'] in ('snell5','snell6'):
             # sing-box's v4 outbound speaks the v5 TCP wire protocol.
             out.update(type='snell',version=4 if n['protocol']=='snell5' else 6,

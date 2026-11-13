@@ -10,7 +10,7 @@ def validate_paths(admin, share):
         if allow_root and not value:return ''
         if not re.fullmatch(r'/[A-Za-z0-9_-]{3,64}',value):
             raise ValueError('路径须为 / 开头的 3–64 位字母、数字、下划线或短横线；管理路径 / 表示根目录')
-        if value in ('/static','/health','/login','/logout','/users','/nodes','/settings','/system','/routing'):
+        if value in ('/static','/health','/login','/logout','/users','/nodes','/settings','/system','/routing','/servers','/agent'):
             raise ValueError('此路径为系统保留路径')
         return value
     admin=check(admin,True);share='/s' if str(share).strip().rstrip('/')=='/s' else check(share)
@@ -20,10 +20,13 @@ def validate_paths(admin, share):
 class EntryPaths:
     def __init__(self,app,db):self.app=app;self.db=db
     async def __call__(self,scope,receive,send):
+        if scope['type']=='websocket':
+            # Agents use a fixed endpoint and independent bearer credentials.
+            return await self.app(scope,receive,send)
         if scope['type']!='http':return await self.app(scope,receive,send)
         settings=read_settings(self.db);admin=settings['admin_path'];share=settings['share_path']
         path=scope['path'];internal=None
-        if path=='/health' or path.startswith('/static/'):internal=path
+        if path=='/health' or path.startswith('/static/') or path.startswith('/agent/'):internal=path
         elif path.startswith(share+'/'):internal='/s/'+path[len(share)+1:]
         elif admin and (path==admin or path.startswith(admin+'/')):internal=path[len(admin):] or '/'
         elif not admin and not path.startswith('/s/'):internal=path

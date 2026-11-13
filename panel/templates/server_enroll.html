@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block content %}
+<header><div><h1>接入 {{ server.name }}</h1><p class="muted">在这台服务器的终端执行下面一条命令。</p></div><a class="button" href="{{ admin_path }}/servers">返回服务器列表</a></header>
+{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+<div id="fleet-enroll" data-fleet-url="{{ admin_path }}/servers/status" data-server-id="{{ server.id }}" data-expires="{{ token_expires }}">
+<section class="fleet-install"><div class="fleet-install-heading"><div class="fleet-step" aria-hidden="true">1</div><div><h2>复制安装命令</h2><p class="muted">{{ server.host }} · Linux · 需要 sudo 或 root 权限</p></div><span class="fleet-token-timer" data-fleet-expiry aria-live="off">接入码有效期 15 分钟</span></div>
+<div data-fleet-command><label class="fleet-command-label" for="fleet-install-command">安装命令</label><textarea id="fleet-install-command" class="fleet-command" readonly rows="4" spellcheck="false" autocomplete="off">{{ command }}</textarea><div class="fleet-install-actions"><button type="button" class="primary" data-fleet-copy="fleet-install-command">复制安装命令</button><span class="muted">接入码仅可使用一次</span></div></div>
+<div class="fleet-expired" data-fleet-expired hidden><p>此接入码已过期，请生成新命令。</p><form method="post" action="{{ admin_path }}/servers/{{ server.id }}/enroll"><input type="hidden" name="token" value="{{ csrf }}"><button class="primary">重新生成命令</button></form></div>
+</section>
+<section class="fleet-connection"><div class="fleet-step" aria-hidden="true">2</div><div class="fleet-connection-body"><h2 data-fleet-enroll-title>等待 Agent 连接</h2><p class="muted" data-fleet-enroll-message>执行命令后，此处会自动显示连接结果。</p><span class="fleet-connection-indicator" data-fleet-enroll-status>等待接入</span><div class="fleet-install-actions" data-fleet-enroll-next hidden><a class="button primary" href="{{ admin_path }}/nodes/new?server_id={{ server.id }}">为这台服务器创建节点</a><a class="button" href="{{ admin_path }}/servers">查看服务器状态</a></div></div></section>
+<p class="fleet-footnote" data-fleet-refresh>安装后由 Agent 主动连接主面板，无需开放管理端口。</p>
+</div>
+<script src="/static/fleet.js?v=2" defer></script>
+{% endblock %}

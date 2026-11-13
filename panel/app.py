@@ -25,6 +25,7 @@ from .sharing import share_context, read_settings, save_settings, qr_image, Moni
 from starlette.middleware.sessions import SessionMiddleware
 from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships, random_port, port_available, rotate_ports
 from .runtime import Runtime
+from .backups import Manager as BackupManager
 from .subscriptions import outbounds
 from .options import NodeOptions, PRESETS, FINGERPRINTS, options, domain, import_key, probe_tls
 from pydantic import ValidationError
@@ -39,6 +40,7 @@ STATS_PORT = int(os.environ.get('PANEL_STATS_PORT', '19090'))
 PUBLIC_HOST = os.environ.get('PANEL_PUBLIC_HOST', '')
 init_db(DB)
 runtime = Runtime(BINARY, DIRECTORY, STATS_PORT)
+backup_manager = BackupManager(DB,DIRECTORY)
 ph = PasswordHasher()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
 templates.env.filters['bytes'] = lambda n: f'{n / 1024**3:.2f} GiB'
@@ -54,7 +56,10 @@ async def lifespan(app):
     runtime.start()
     routing_publisher.start()
     monitor.start()
+    backup_manager.start()
     yield
+    await fleet_shutdown()
+    backup_manager.stop()
     routing_publisher.stop()
     monitor.stop()
     runtime.stop()
@@ -198,8 +203,13 @@ def valid_name(name):
         raise HTTPException(422,'名称需要 1–80 个字符')
     return name
 
+def server_choices():
+    from .fleet import list_servers
+    return [{'id':'local','name':'主面板本机','host':PUBLIC_HOST}]+[
+        {'id':s['id'],'name':s['name'],'host':s['host']} for s in list_servers(DB) if s['enabled']]
+
 def editor(request, node=None, values=None, error='', notice='', status=200):
-    context={'name':'','protocol':'snell6','port':'','mode':'compat','server_name':'',
+    context={'name':'','protocol':'snell6','port':'','mode':'compat','server_name':'','server_id':'local',
              **NodeOptions().model_dump()}
     if node:
         context.update(node)
@@ -210,16 +220,18 @@ def editor(request, node=None, values=None, error='', notice='', status=200):
     context.pop('private_key',None)
     context.pop('psk',None)
     response=render(request,'node_editor.html',node=node,values=context,error=error,notice=notice,
-                    presets=PRESETS,fingerprints=FINGERPRINTS)
+                    presets=PRESETS,fingerprints=FINGERPRINTS,servers=server_choices())
     response.status_code=status
     return response
 
 @app.get('/nodes/new',response_class=HTMLResponse)
-def new_node(request: Request, protocol: str='snell6'):
+def new_node(request: Request, protocol: str='snell6', server_id: str='local'):
     authenticated(request)
     if protocol not in PROTOCOLS:
         raise HTTPException(422,'协议无效')
-    values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else ''}
+    if server_id not in {s['id'] for s in server_choices()}:
+        raise HTTPException(422,'请选择可用的服务器')
+    values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else '', 'server_id':server_id}
     if protocol in ('hysteria2','anytls') and (DIRECTORY/'tls/fullchain.pem').exists():
         from urllib.parse import urlsplit
         values.update(certificate_path=str(DIRECTORY/'tls/fullchain.pem'),key_path=str(DIRECTORY/'tls/privkey.pem'),server_name=urlsplit(read_settings(DB)['public_url']).hostname or '')
@@ -245,6 +257,11 @@ async def save_node(request,identity=None):
     node=next((n for n in records(DB,'nodes') if n['id']==identity),None) if identity else None
     if identity and not node:raise HTTPException(404)
     try:
+        server_id=str(raw.get('server_id',node.get('server_id','local') if node else 'local'))
+        if node and server_id != node.get('server_id','local'):
+            raise ValueError('已有节点不能直接迁移服务器，请在目标服务器新建节点')
+        if server_id not in {s['id'] for s in server_choices()}:
+            raise ValueError('请选择已启用的服务器')
         protocol=node['protocol'] if node else str(raw.get('protocol','snell6'))
         if protocol not in PROTOCOLS:raise ValueError('协议无效')
         settings=NodeOptions.model_validate(raw)
@@ -267,7 +284,7 @@ async def save_node(request,identity=None):
         name=valid_name(str(raw.get('name','')))
         with connect(DB) as db:
             port=int(raw['port']) if str(raw.get('port','')).strip() else (node['port'] if node else random_port(db,(STATS_PORT,STATS_PORT+1,18889)))
-        if not 1024<=port<=65535 or port in (STATS_PORT,STATS_PORT+1,18889):
+        if not 1024<=port<=65535 or port in (STATS_PORT,STATS_PORT+1,18889,19190,19191):
             raise ValueError('节点端口须为 1024–65535，且不能占用面板或统计 API 端口')
         if protocol=='snell6' and settings.snell_mode=='unsafe-raw' and raw.get('acknowledge_raw')!='1':
             raise ValueError('unsafe-raw 不加密；请明确勾选风险确认，或使用 default / unshaped')
@@ -289,7 +306,7 @@ async def save_node(request,identity=None):
                 candidate['public_key']=re.search(r'PublicKey:\s*(\S+)',keys)[1]
         group_name=str(raw.get('group_name','')).strip();comment=str(raw.get('comment','')).strip()
         if len(group_name)>60 or len(comment)>500:raise ValueError('分组最多 60 字，备注最多 500 字')
-        candidate.update(group_name=group_name,comment=comment,name=name,protocol=protocol,port=port,mode=mode,server_name=sni,
+        candidate.update(server_id=server_id,group_name=group_name,comment=comment,name=name,protocol=protocol,port=port,mode=mode,server_name=sni,
                          options=json.dumps(settings.model_dump()))
         # Check a populated inbound, including nodes that currently have no users.
         from .core import config
@@ -299,7 +316,7 @@ async def save_node(request,identity=None):
         check_document(document)
         with runtime.lock, connect(DB) as db:
             db.execute('BEGIN IMMEDIATE')
-            if (not node or port != node['port']) and not port_available(port):
+            if server_id=='local' and (not node or port != node['port']) and not port_available(port):
                 raise ValueError('该端口已被系统中的服务占用')
             grants=db.execute('SELECT count(*) FROM memberships WHERE node_id=?',(candidate['id'],)).fetchone()[0]
             if node and grants and (mode!=node['mode'] or (node['mode']=='compat' and port!=node['port'])):
@@ -308,7 +325,7 @@ async def save_node(request,identity=None):
                 raise ValueError('该端口已用于其他节点')
             if db.execute('SELECT 1 FROM memberships WHERE port=? AND node_id<>?',(port,candidate['id'])).fetchone():
                 raise ValueError('该端口已分配给其他节点的用户')
-            fields=('name','protocol','port','secret','private_key','public_key','short_id','server_name','mode','options','group_name','comment')
+            fields=('name','protocol','port','secret','private_key','public_key','short_id','server_name','mode','options','group_name','comment','server_id')
             if node:
                 db.execute('UPDATE nodes SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',
                            tuple(candidate[k] for k in fields)+(candidate['id'],))
@@ -521,3 +538,11 @@ install(app,sys.modules[__name__])
 
 from .routing_admin import install as install_routing
 install_routing(app,sys.modules[__name__])
+
+from .fleet_api import install as install_fleet
+from .fleet_config import configuration as fleet_configuration
+install_fleet(app,sys.modules[__name__])
+from .agent_downloads import install as install_agent_downloads
+install_agent_downloads(app,sys.modules[__name__])
+from .backups import install as install_backups
+install_backups(app,sys.modules[__name__])

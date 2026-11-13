@@ -27,8 +27,9 @@ window.panelAsyncForms=true;
  document.addEventListener('click',event=>{const a=event.target.closest('a[href]');if(!a||event.defaultPrevented||event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey||a.target||a.hasAttribute('download'))return;const url=new URL(a.href);if(!eligible(url)||url.hash)return;event.preventDefault();if(!submitting)navigate(url.href);});
  document.addEventListener('submit',async event=>{
   const form=event.target;if(!form.closest('#admin-content')||prefix()==null||event.defaultPrevented)return;
-  const button=event.submitter,url=new URL(button?.hasAttribute('formaction')?button.formAction:(form.action||location.href)),method=(button?.getAttribute('formmethod')||form.method||'get').toUpperCase();
-  if(!eligible(url)||form.target)return;event.preventDefault();if(submitting)return;
+  // Controls named action/method/target shadow HTMLFormElement properties.
+  const button=event.submitter,url=new URL(button?.getAttribute('formaction')||form.getAttribute('action')||location.href,location.href),method=(button?.getAttribute('formmethod')||form.getAttribute('method')||'get').toUpperCase();
+  if(!eligible(url)||button?.getAttribute('formtarget')||form.getAttribute('target'))return;event.preventDefault();if(submitting)return;
   const data=new FormData(form);if(button?.name)data.append(button.name,button.value);
   if(method==='GET'){url.search=new URLSearchParams(data).toString();navigate(url.href);return;}
   submitting=true;

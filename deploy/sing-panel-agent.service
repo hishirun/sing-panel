@@ -1,0 +1,25 @@
+[Unit]
+Description=SingBox Panel Agent - authenticated WSS node management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=singpanel-agent
+Group=singpanel-agent
+WorkingDirectory=/opt/sing-panel-agent
+ExecStart=/opt/sing-panel-agent/venv/bin/python -m agent run --config /var/lib/sing-panel-agent/config.json
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+UMask=0077
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sing-panel-agent /opt/sing-panel-agent/releases
+
+[Install]
+WantedBy=multi-user.target

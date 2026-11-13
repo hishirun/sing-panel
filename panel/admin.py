@@ -49,7 +49,7 @@ def install(app,m):
         ips=[]
         if user.get('id'):
             with connect(m.DB) as db:ips=[dict(r) for r in db.execute('SELECT * FROM client_ips WHERE user_id=? ORDER BY last_seen DESC',(user['id'],))]
-        return m.render(request,'user_editor.html',user=user,nodes=records(m.DB,'nodes'),ips=ips,error=error)
+        return m.render(request,'user_editor.html',user=user,nodes=records(m.DB,'nodes'),ips=ips,error=error,servers=m.server_choices())
 
     @app.get('/users')
     def users_page(request:Request,q:str='',group:str='',state:str=''):
@@ -170,6 +170,8 @@ def install(app,m):
         for n in nodes:
             n['members']=sum(x['node_id']==n['id'] for x in members)
             n['exits']=node_exits(m.DB,n,routing)
+            from .options import options
+            n['connect_address']=options(n)['connect_host'] or n.get('server_host') or m.PUBLIC_HOST
         nodes=[n for n in nodes if (not q or q.casefold() in (n['name']+' '+n['comment']).casefold()) and (not group or n['group_name']==group)]
         return m.render(request,'nodes.html',nodes=nodes,groups=groups,q=q,group=group,host=m.PUBLIC_HOST,error=m.runtime.error)
 
