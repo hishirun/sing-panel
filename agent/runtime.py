@@ -178,7 +178,11 @@ class Core:
             deadline = time.monotonic() + 25
             for entry in sets:
                 tag = entry.get('tag', '')
-                if entry.get('type') != 'remote' or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', tag):
+                # Official geosite categories include both exclusions (!cn)
+                # and attributes (@cn). These are safe literal filename
+                # characters; dots, separators and control bytes remain barred.
+                if (entry.get('type') != 'remote' or not isinstance(tag, str)
+                        or not re.fullmatch(r'[A-Za-z0-9_!@-]{1,160}', tag)):
                     raise ValueError('Unsupported rule-set source')
                 parsed = urlsplit(entry.get('url', ''))
                 if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
