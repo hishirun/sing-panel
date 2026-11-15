@@ -206,6 +206,7 @@ def install(app,m):
         m.authenticated(request)
         with connect(m.DB) as db:logs=[dict(r) for r in db.execute('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100')]
         return m.render(request,'system.html',error=m.runtime.error,online=m.runtime.online,logs=logs,
+                        admin_username=m.auth.get('username','admin'),
                         version='sing-box 1.14.3',running=bool(m.runtime.process and m.runtime.process.poll() is None))
 
     @app.post('/system/restart')

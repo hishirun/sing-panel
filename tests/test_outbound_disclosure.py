@@ -67,7 +67,7 @@ def test_stored_names_and_rule_json_cannot_inject_markup_or_templates(customer, 
 
     login = c.get('/login')
     csrf = re.search('name="token" value="([^"]+)"', login.text)[1]
-    c.post('/login', data={'password': 'test-password-only', 'token': csrf})
+    assert c.post('/login', data={'username': 'admin', 'password': 'test-password-only', 'token': csrf}, follow_redirects=False).status_code == 303
     for path in ['/users', '/nodes', '/routing', '/users/u/routing']:
         response = c.get(path)
         assert response.status_code == 200, path

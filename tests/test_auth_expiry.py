@@ -12,7 +12,7 @@ def test_expired_browser_and_async_navigation_redirect(client):
         assert response.headers['location']=='/manage-test/login?expired=1'
     page=c.get('/manage-test/users',headers={'Accept':'text/html'})
     assert page.status_code==200 and '登录状态已失效' in page.text
-    assert '管理员密码' in page.text
+    assert '管理员账号' in page.text and '登录密码' in page.text
 
 
 def test_expired_api_and_post_remain_unauthorized_with_utf8(client):

@@ -24,7 +24,7 @@ def client(tmp_path,monkeypatch):
     with TestClient(module.app) as c:
         page=c.get('/login')
         token=re.search('name="token" value="([^"]+)"',page.text)[1]
-        assert c.post('/login',data={'password':'test-password-only','token':token}).status_code==200
+        assert c.post('/login',data={'username':'admin','password':'test-password-only','token':token},follow_redirects=False).status_code==303
         yield c,module
 
 def csrf(c):

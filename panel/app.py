@@ -127,7 +127,7 @@ def login_page(request: Request):
     return render(request, 'login.html', notice='登录状态已失效，请重新登录' if request.query_params.get('expired') == '1' else '')
 
 @app.post('/login')
-def login(request: Request, password: str = Form(...), token: str = Form(...)):
+def login(request: Request, password: str = Form(...), token: str = Form(...), username: str = Form('')):
     csrf(request, token)
     ip = request.client.host
     now = time.monotonic()
@@ -138,10 +138,18 @@ def login(request: Request, password: str = Form(...), token: str = Form(...)):
     if len(attempts.get(ip, [])) >= 10:
         raise HTTPException(429, '请五分钟后重试')
     attempts.setdefault(ip, []).append(now)
+    username = username.strip()
+    expected_username = auth.get('username', 'admin')
+    username_matches = (0 < len(username) <= 64 and isinstance(expected_username, str)
+                        and hmac.compare_digest(username.encode('utf-8'), expected_username.encode('utf-8')))
+    password_matches = False
     try:
-        ph.verify(auth['password_hash'], password)
+        if len(password) <= 1024:
+            password_matches = ph.verify(auth['password_hash'], password)
     except (VerificationError, KeyError):
-        return render(request, 'login.html', error='密码不正确')
+        pass
+    if not username_matches or not password_matches:
+        return render(request, 'login.html', error='账号或密码不正确', login_username=username[:64])
     attempts.pop(ip, None)
     request.session.clear()
     request.session.update(admin=True, csrf=secrets.token_urlsafe(32),auth_revision=auth.get('revision',0))

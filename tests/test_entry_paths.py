@@ -30,7 +30,7 @@ def test_changed_paths_redirects_and_old_entry_rejected(client):
     assert c.get('/manage-test',follow_redirects=False).headers['location']=='/manage-test/login'
     login=c.get('/manage-test/login')
     token=re.search('name="token" value="([^"]+)"',login.text)[1]
-    assert c.post('/manage-test/login',data={'password':'test-password-only','token':token},follow_redirects=False).headers['location']=='/manage-test/'
+    assert c.post('/manage-test/login',data={'username':'admin','password':'test-password-only','token':token},follow_redirects=False).headers['location']=='/manage-test/'
     token=re.search('name="token" value="([^"]+)"',c.get('/manage-test/').text)[1]
     c.post('/manage-test/nodes',data={'token':token,'name':'v6','protocol':'snell6','port':32123,'mode':'shared'})
     node=m.records(m.DB,'nodes')[0]
