@@ -5,6 +5,7 @@ import pytest
 
 from panel.core import connect
 from test_app import client
+from customer_helpers import customer_login
 
 
 @pytest.mark.parametrize('revocation,expected', [
@@ -16,6 +17,7 @@ def test_password_write_rechecks_authorization_after_waiting_for_lock(client, mo
     with connect(m.DB) as db:
         db.execute("INSERT INTO users(id,name,secret,uuid,token) VALUES('u','Alice','original-secret','original-uuid','old-token')")
     c.cookies.clear()
+    customer_login(c,'/s/old-token')
     csrf = c.get('/s/old-token/routing/api').json()['csrf']
     original_lock = m.runtime.lock
 

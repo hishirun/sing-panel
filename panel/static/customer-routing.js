@@ -65,6 +65,7 @@
     const options = {method, credentials: 'same-origin', cache: 'no-store', signal: scope, headers: {'Accept': 'application/json'}};
     if (method !== 'GET') { options.headers['Content-Type'] = 'application/json'; options.body = JSON.stringify({csrf: state.csrf, ...payload}); }
     const response = await fetch(base + path, options);
+    if (window.customerAuthRedirect?.(response)) throw new DOMException('登录状态已失效', 'AbortError');
     let data;
     try { data = await response.json(); } catch (_) { throw new Error('请求未完成，请稍后重试'); }
     if (!response.ok) {
@@ -74,6 +75,7 @@
         // replaying the rejected mutation or discarding still-authorized edits.
         try {
           const fresh = await fetch(base + '/api', {credentials: 'same-origin', cache: 'no-store', signal: scope, headers: {'Accept': 'application/json'}});
+          if (window.customerAuthRedirect?.(fresh)) throw new DOMException('登录状态已失效', 'AbortError');
           if (fresh.ok) {
             const next = await fresh.json();
             if (!next.policy.allowed) { clearTimeout(saveTimer); await closeEditor(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; }

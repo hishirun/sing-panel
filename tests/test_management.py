@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from panel.core import connect, records, account
 from panel.management import maintain, next_boundary, presence
 from test_app import client, csrf
+from customer_helpers import customer_login
 
 def test_management_pages_and_bulk_lifecycle(client):
     c,m=client;t=csrf(c)
@@ -15,6 +16,8 @@ def test_management_pages_and_bulk_lifecycle(client):
     assert c.post('/users/create',data=data).status_code==200
     users=records(m.DB,'users');assert len(users)==2
     assert all(u['expires']==0 and u['group_name']=='Friends' for u in users)
+    customer_login(c,'/s/'+users[0]['token'])
+    t=csrf(c)
     assert '等待激活' in c.get('/s/'+users[0]['token']).text
     account(m.DB,'epoch',{'user>>>'+users[0]['id']+'>>>traffic>>>uplink':100})
     user=records(m.DB,'users')[0]

@@ -41,7 +41,7 @@ class EntryPaths:
                 current=read_settings(self.db)
                 headers=[]
                 for key,value in message['headers']:
-                    if key.lower()==b'location':
+                    if key.lower() in (b'location', b'x-customer-login'):
                         target=value.decode('latin1')
                         parsed=urlsplit(target)
                         absolute=bool(parsed.netloc)

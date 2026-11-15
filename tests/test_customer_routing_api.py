@@ -10,6 +10,7 @@ import pytest
 from panel import routing, user_routing as ur
 from panel.core import connect
 from test_app import client
+from customer_helpers import customer_login
 
 
 @pytest.fixture
@@ -41,6 +42,7 @@ def customer(client,monkeypatch):
     routing.write(m.DB,settings)
     c.cookies.clear()
     root='/s/token-u/routing'
+    customer_login(c,'/s/token-u')
     initial=c.get(root+'/api').json()
     return c,m,root,initial['csrf']
 
@@ -52,7 +54,7 @@ def document(**changes):
     return {'enabled':True,'rules':[row]}
 
 
-def test_authorized_link_opens_without_password_and_projects_only_granted_data(customer):
+def test_authenticated_customer_projects_only_granted_data(customer):
     c,m,root,t=customer
     state=c.get(root+'/api').json()
     assert state['editable'] and not state['locked']
@@ -68,8 +70,9 @@ def test_authorized_link_opens_without_password_and_projects_only_granted_data(c
     for action in ['lock','unlock']:
         assert c.post(root+'/'+action,json={'csrf':t}).status_code==404
     assert c.get('/s/unknown-token/routing/api').status_code==404
-    # Each valid token grants access to its own user, independently of browser
-    # sessions. It never grants the first user's exits to the second account.
+    # Logging into another customer never grants the first user's exits.
+    assert c.get('/s/token-v/routing/api').status_code==401
+    customer_login(c,'/s/token-v')
     other=c.get('/s/token-v/routing/api').json()
     assert other['editable'] and not other['locked']
     assert [out['id'] for out in other['outbounds']]==['theirs']
@@ -106,6 +109,9 @@ def test_draft_grants_are_checked_on_server_and_cannot_target_other_user(custome
     assert ur.get_policy(m.DB,'v')['revision']==0
     assert c.post(endpoint,json={'csrf':t,'revision':0,'document':document()}).status_code==409
     assert c.post(endpoint,json={'csrf':t,'revision':True,'document':document()}).status_code==409
+    assert c.post('/s/token-v/routing/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==401
+    customer_login(c,'/s/token-v')
+    t=c.get('/s/token-v/routing/api').json()['csrf']
     assert c.post('/s/token-v/routing/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==422
     second=c.post('/s/token-v/routing/draft',json={'csrf':t,'revision':0,'document':document(target='theirs',node_ids=['other'])})
     assert second.status_code==200
@@ -138,6 +144,9 @@ def test_token_rotation_account_restrictions_and_revocation_block_writes(custome
     assert c.get(root+'/api').status_code==404
     assert c.post(root+'/draft',json={'csrf':t,'revision':0,'document':document()}).status_code==404
     root='/s/new-token/routing'
+    assert c.get(root+'/api').status_code==401
+    customer_login(c,'/s/new-token')
+    t=c.get(root+'/api').json()['csrf']
     assert c.get(root+'/api').json()['editable']
     with connect(m.DB) as db:
         db.execute("UPDATE users SET enabled=0 WHERE id='u'")

@@ -80,7 +80,9 @@ def test_ua_routes_scope_headers_and_overrides(client):
         c.post('/users',data={'token':t,'name':name,'node_ids':[node['id']]})
     alice,bob=m.records(m.DB,'users')
     path='/s/'+alice['token']
-    assert 'text/html' in c.get(path,headers={'user-agent':'Mozilla/5.0'}).headers['content-type']
+    browser=c.get(path,headers={'user-agent':'Mozilla/5.0','accept':'text/html'})
+    assert 'text/html' in browser.headers['content-type']
+    assert '设置登录密码' in browser.text and alice['secret'] not in browser.text
     for agent,fmt in [('Surge/4000','surge.conf'),('Surfboard/2','surfboard.conf'),('mihomo/1.19','clash.yaml'),('sing-box/1.14','sing-box.json'),('Shadowrocket/2400','shadowrocket.txt')]:
         for entry in (path,path+'/subscription'):
             res=c.get(entry,headers={'user-agent':agent})

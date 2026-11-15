@@ -3,6 +3,25 @@
 window.panelScope = new AbortController();
 window.panelListen = (target, type, listener, options = {}) => target.addEventListener(type, listener, {...(typeof options === 'boolean' ? {capture: options} : options), signal: window.panelScope.signal});
 
+// Authentication redirects replace the whole page so protected chrome and data
+// are never left behind after expiry, logout or an administrator password reset.
+window.customerAuthRedirect = response => {
+  const destination = response.headers.get('X-Customer-Login') || (response.redirected ? response.url : '');
+  const share = document.getElementById('customer-content')?.dataset.shareUrl;
+  if (!destination || !share) return false;
+  let url, base;
+  try { url = new URL(destination, location.href); base = new URL(share, location.href).pathname.replace(/\/$/, ''); }
+  catch (_) { return false; }
+  if (url.origin !== location.origin || ![base + '/login', base + '/setup'].includes(url.pathname)) return false;
+  window.customerCanLeave = null;
+  document.dispatchEvent(new Event('panel:dispose'));
+  const main = document.getElementById('customer-content');
+  if (main) { const note = document.createElement('p'); note.setAttribute('role', 'status'); note.textContent = '请重新登录'; main.replaceChildren(note); }
+  document.querySelectorAll('.traffic-tooltip').forEach(node => node.remove());
+  location.replace(url.href);
+  return true;
+};
+
 document.addEventListener('click', event => {
   const link = event.target.closest('[data-client-import]');
   if (!link) return;
@@ -29,6 +48,7 @@ document.addEventListener('click', event => {
     content()?.setAttribute('aria-busy', 'true');
     try {
       const response = await fetch(url, {signal: pending.signal, credentials: 'same-origin', cache: 'no-store', headers: {'Accept': 'text/html'}});
+      if (window.customerAuthRedirect(response)) return;
       if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) throw new Error('页面加载失败，请重试');
       const html = new DOMParser().parseFromString(await response.text(), 'text/html');
       const next = html.getElementById('customer-content');

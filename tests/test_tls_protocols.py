@@ -1,4 +1,5 @@
 from test_app import client
+from customer_helpers import customer_login
 
 import base64,json,os,subprocess,threading,time
 from http.server import ThreadingHTTPServer
@@ -117,6 +118,7 @@ def test_share_reset_date_display(client):
     from panel.management import maintain
     maintain(m.DB)
     u=m.records(m.DB,'users')[0]
+    customer_login(c,'/s/'+u['token'])
     page=c.get('/s/'+u['token'])
     assert '下次重置' in page.text and '北京时间' in page.text
     assert '计算中' not in page.text

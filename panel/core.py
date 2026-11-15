@@ -76,6 +76,8 @@ def init_db(path):
         migrate(db)
         from .user_routing import migrate as migrate_user_routing
         migrate_user_routing(db)
+        from .customer_auth import migrate as migrate_customer_auth
+        migrate_customer_auth(db)
         if 'server_id' not in {r[1] for r in db.execute('PRAGMA table_info(nodes)')}:
             db.execute("ALTER TABLE nodes ADD COLUMN server_id TEXT NOT NULL DEFAULT 'local'")
         from .fleet import migrate as migrate_fleet

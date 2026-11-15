@@ -27,6 +27,7 @@ from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships,
 from .runtime import Runtime
 from .backups import Manager as BackupManager
 from .subscriptions import outbounds
+from .customer_auth import require_customer as user_authenticated
 from .options import NodeOptions, PRESETS, FINGERPRINTS, options, domain, import_key, probe_tls
 from pydantic import ValidationError
 
@@ -88,6 +89,11 @@ async def headers(request, call_next):
 @app.exception_handler(HTTPException)
 async def http_error(request: Request, error: HTTPException):
     from fastapi.exception_handlers import http_exception_handler
+    if error.status_code == 401 and error.detail == '用户面板需要登录':
+        browser = ('text/html' in request.headers.get('accept', '') or
+                   request.headers.get('sec-fetch-dest') == 'document')
+        if request.method in ('GET', 'HEAD') and browser:
+            return RedirectResponse(error.headers['X-Customer-Login'], status_code=303)
     if error.status_code == 401 and error.detail == '请先登录':
         browser = ('text/html' in request.headers.get('accept', '') or
                    request.headers.get('sec-fetch-dest') == 'document' or
@@ -106,7 +112,8 @@ def authenticated(request):
 
 def csrf(request, token):
     expected = request.session.get('csrf', '')
-    if not expected or not hmac.compare_digest(expected, token):
+    if (not isinstance(expected,str) or not expected or not isinstance(token,str) or len(token)>256
+            or not hmac.compare_digest(expected.encode('utf-8'),token.encode('utf-8'))):
         raise HTTPException(403, '页面已过期，请刷新后重试')
 
 def render(request, name, **context):
@@ -435,19 +442,19 @@ def customer(request: Request, token: str, changed: bool=False, period: str="7d"
     detected = detect_client(request.headers.get('user-agent', ''))
     if requested or detected:
         return subscription(request, token, requested or detected)
-    user=subscription_user(token)
+    user=user_authenticated(request,token,DB)
     context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
     from .traffic import traffic_view
     context['traffic']=traffic_view(DB,user['id'],context['nodes'],period)
     from .client_profiles import client_imports
     context['client_imports']=client_imports(context['share_url'],user['name'])
-    response = render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed)
+    response = render(request,'customer.html',**context,status=reason(user),subtoken=token,changed=changed,customer_authenticated=True)
     response.headers['Vary'] = 'User-Agent'
     return response
 
 @app.get('/s/{token}/qr/{kind}')
 def customer_qr(request: Request, token: str, kind: str):
-    user=subscription_user(token)
+    user=user_authenticated(request,token,DB)
     context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
     if kind=='page':
         text=context['share_url']
@@ -461,7 +468,7 @@ def customer_qr(request: Request, token: str, kind: str):
 
 @app.post('/s/{token}/psk')
 def customer_psk(request: Request, token: str, csrf_token: str=Form(...), psk: str=Form('')):
-    user=subscription_user(token)
+    user=user_authenticated(request,token,DB)
     csrf(request,csrf_token)
     if reason(user):raise HTTPException(403,'当前订阅已停用，无法修改密码')
     psk=psk.strip() or secrets.token_urlsafe(24)
@@ -471,7 +478,7 @@ def customer_psk(request: Request, token: str, csrf_token: str=Form(...), psk: s
         # Token rotation, account changes and traffic accounting share this
         # lock. Revalidate after waiting so an already revoked link cannot
         # leave a new credential behind.
-        user=subscription_user(token)
+        user=user_authenticated(request,token,DB)
         if reason(user):raise HTTPException(403,'当前订阅已停用，无法修改密码')
         db.execute('BEGIN IMMEDIATE')
         key='psk_changed:'+user['id']
@@ -487,6 +494,8 @@ from .routing_publish import Publisher
 from .customer_routing import install as install_customer_routing
 routing_publisher = Publisher(sys.modules[__name__])
 install_customer_routing(app, sys.modules[__name__])
+from .customer_auth import install as install_customer_auth
+install_customer_auth(app, sys.modules[__name__])
 
 @app.get('/s/{token}/{format}')
 def subscription(request: Request, token: str, format: str):

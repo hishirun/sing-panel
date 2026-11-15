@@ -2,6 +2,7 @@ import re
 import pytest
 from test_app import client,csrf
 from panel.paths import validate_paths
+from customer_helpers import customer_login
 
 def test_paths_validation():
     assert validate_paths('/manage-123/','/share-456/')==('/manage-123','/share-456')
@@ -38,6 +39,7 @@ def test_changed_paths_redirects_and_old_entry_rejected(client):
     c.post('/manage-test/users',data={'token':token,'name':'tester','node_ids':node['id'],'quota_gib':1})
     user=m.records(m.DB,'users')[0]
     prefix='/share-test/'+user['token']
+    customer_login(c,prefix)
     assert c.get(prefix).status_code==200
     assert prefix in c.get(prefix).text
     assert c.get(prefix+'/sing-box.json').status_code==200

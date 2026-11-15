@@ -46,6 +46,9 @@ def install(app,m):
            'reset_mode':'none','reset_days':30,'reset_day':1,'reset_weekday':1,**json.loads(user.get('policy','{}'))}
         user['policy_values']=p
         memberships=records(m.DB,'memberships');user['node_ids']=[x['node_id'] for x in memberships if x['user_id']==user.get('id')]
+        from .customer_auth import status as password_status
+        login = password_status(m.DB,user['id']) if user.get('id') else {'password_set':False,'updated_at':0}
+        user.update(has_login_password=login['password_set'],login_password_updated_at=login['updated_at'])
         ips=[]
         if user.get('id'):
             with connect(m.DB) as db:ips=[dict(r) for r in db.execute('SELECT * FROM client_ips WHERE user_id=? ORDER BY last_seen DESC',(user['id'],))]
@@ -56,7 +59,11 @@ def install(app,m):
         m.authenticated(request)
         users=records(m.DB,'users');nodes=records(m.DB,'nodes');members=records(m.DB,'memberships')
         groups=sorted({u['group_name'] for u in users if u['group_name']})
+        with connect(m.DB) as db:
+            passwords={r['user_id']:dict(r) for r in db.execute("SELECT user_id,password_hash!='' AS password_set,updated_at FROM user_auth")}
         for u in users:
+            login=passwords.get(u['id'],{'password_set':False,'updated_at':0})
+            u.update(has_login_password=bool(login['password_set']),login_password_updated_at=login['updated_at'])
             u['state']=reason(u);u['online']=m.runtime.online.get(u['id'],{'ips':[],'connections':0})
             u['node_names']=[n['name'] for n in nodes if any(x['node_id']==n['id'] and x['user_id']==u['id'] for x in members)]
             u['expiry_text']=datetime.fromtimestamp(u['expires'],timezone.utc).strftime('%Y-%m-%d') if u['expires'] else '未激活' if json.loads(u['policy']).get('first_use_days') and not u['activated_at'] else '长期'

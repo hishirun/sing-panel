@@ -99,7 +99,8 @@ window.panelListen(document,'change', event => {
     let message = panel.querySelector('[data-traffic-error]');
     if (message) message.remove();
     try {
-      const response = await fetch(url, {signal: controller.signal, cache: 'no-store'});
+      const response = await fetch(url, {signal: controller.signal, cache: 'no-store', headers: {'Accept': 'text/html'}});
+      if (window.customerAuthRedirect?.(response)) return;
       if (!response.ok || response.redirected) throw new Error('Unavailable');
       const page = new DOMParser().parseFromString(await response.text(), 'text/html');
       const next = page.querySelector('#traffic');

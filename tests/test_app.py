@@ -5,6 +5,7 @@ import re
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 import pytest
+from customer_helpers import customer_login
 
 @pytest.fixture
 def client(tmp_path,monkeypatch):
@@ -144,6 +145,7 @@ def test_share_page_scoped_configs_qr_and_password(client):
     c.post('/users',data={'token':token,'name':'Bob','node_ids':[nodes[0]['id']]})
     alice,bob=m.records(m.DB,'users')
     url='/s/'+alice['token']
+    customer_login(c,url)
     page=c.get(url)
     assert page.status_code==200
     assert alice['secret'] in page.text and bob['secret'] not in page.text
@@ -173,10 +175,11 @@ def test_share_settings_validation_and_branding(client):
     assert 'My Panel' in c.get('/').text
     c.post('/users',data={'token':token,'name':'Alice'})
     user=m.records(m.DB,'users')[0]
+    customer_login(c,'/s/'+user['token'])
     page=c.get('/s/'+user['token'])
     assert 'https://example.com/s/'+user['token'] in page.text
     assert 'Contact admin' in page.text
-    settings['public_url']='javascript:alert(1)'
+    settings.update(public_url='javascript:alert(1)',token=csrf(c))
     assert '公开地址' in c.post('/settings',data=settings).text
     from panel.sharing import read_settings
     assert read_settings(m.DB)['public_url']=='https://example.com'

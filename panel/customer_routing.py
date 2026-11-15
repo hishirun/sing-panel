@@ -74,7 +74,7 @@ def install(app, m):
             limits[key] = hits + [now]
 
     def identity(request, token, require_access=False, write=False):
-        user = m.subscription_user(token)
+        user = m.user_authenticated(request,token,m.DB)
         policy = ur.get_policy(m.DB, user['id'])
         allowed = bool(policy['allowed'])
         if require_access and not allowed:
@@ -135,10 +135,10 @@ def install(app, m):
 
     @app.get('/s/{token}/routing')
     def page(request:Request, token:str):
-        user = m.subscription_user(token)
+        user = m.user_authenticated(request,token,m.DB)
         data = state(request, token)
         return m.render(request,'customer_routing.html',user={'name':user['name']},
-                        share_url=data['share_url'],routing_state=data)
+                        share_url=data['share_url'],routing_state=data,customer_authenticated=True,subtoken=token)
 
     @app.get('/s/{token}/routing/api')
     def api(request:Request, token:str):
