@@ -2,7 +2,7 @@
 import json, os, socket, subprocess, tempfile, time
 from pathlib import Path
 from panel.core import init_db, connect, records, set_memberships
-from panel.runtime import Runtime
+from loopback_fixture import LoopbackFixtureRuntime
 from panel.subscriptions import outbounds
 binary=os.environ.get('SING_BOX','sing-box')
 def port():
@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix='sing-panel-ip-audit-') as directory:
         c.execute("INSERT INTO nodes(id,name,protocol,port,secret,mode) VALUES('n','N','snell6',?,'test-node-secret-123456','shared')",(port(),))
         c.execute("INSERT INTO users(id,name,secret,uuid,token,max_ips) VALUES('u','U','test-user-secret-123456','uuid','token',1)")
         set_memberships(c,'u',['n'])
-    rt=Runtime(binary,path,port());rt.apply();clients=[];proxies=[];target=socket.socket();target.bind(('127.0.0.1',0));target.listen()
+    rt=LoopbackFixtureRuntime(binary,path,port());rt.apply();clients=[];proxies=[];target=socket.socket();target.bind(('127.0.0.1',0));target.listen()
     try:
         out=outbounds(records(db,'users')[0],records(db,'nodes'),records(db,'memberships'),'127.0.0.1')[0]
         for index,source in enumerate(('127.0.0.2','127.0.0.3')):

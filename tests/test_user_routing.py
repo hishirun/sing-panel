@@ -6,6 +6,7 @@ import pytest
 from panel.core import connect, init_db, current_config, records, set_memberships, config
 from panel import routing as r
 from panel import user_routing as ur
+from loopback_fixture import LoopbackFixtureRuntime, unprotected_fixture
 
 @pytest.fixture
 def policy_db(tmp_path):
@@ -49,7 +50,7 @@ def publish_for_test(path, uid, document):
 
 
 def terminal_rules(document):
-    return [rule for rule in document['route']['rules'] if rule['action'] in ('route', 'reject')]
+    return [rule for rule in unprotected_fixture(document)['route']['rules'] if rule['action'] in ('route', 'reject')]
 
 
 def test_migration_draft_revision_and_runtime_separation(policy_db):
@@ -254,7 +255,6 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
     import time
     import uuid
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from panel.runtime import Runtime
     from panel.subscriptions import outbounds
     from traffic_audit import socks, receive
     from test_integration import port
@@ -330,7 +330,7 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
         for i, uid in enumerate(('alice', 'bob')):
             ur.configure_user(path, uid, True)
             publish_for_test(path, uid, draft('exit'+str(i), kind='ip_cidr', values=['127.0.0.1/32']))
-        rt = Runtime(binary, tmp_path, port());rt.apply()
+        rt = LoopbackFixtureRuntime(binary, tmp_path, port());rt.apply()
         clients = []
         for user in records(path, 'users'):
             outs = outbounds(user, records(path, 'nodes'), records(path, 'memberships'), '127.0.0.1')
@@ -405,15 +405,17 @@ def test_whole_policy_rule_set_and_value_budget(policy_db):
         ur.validate_draft(policy_db, 'alice', doc)
 
 
-def test_resolve_is_user_scoped_and_follows_forced_and_earlier_domain_rules(policy_db):
+def test_system_resolve_is_unique_and_business_rule_scopes_keep_their_order(policy_db):
     settings = r.load(policy_db)
     settings['rules'] = [{'id': 'fixed', 'name': 'Fixed', 'enabled': True, 'match': {}, 'node_ids': ['compat'], 'target': 'exit1'}]
     r.write(policy_db, settings)
     doc = draft('exit1')
     doc['rules'].append(draft('exit2', kind='geoip', values=['us'], identity='geo')['rules'][0])
     publish_for_test(policy_db, 'alice', doc)
-    rules = current_config(policy_db)['route']['rules']
-    assert [rule['action'] for rule in rules] == ['sniff', 'route', 'route', 'resolve', 'route']
+    document = current_config(policy_db)
+    assert sum(rule['action'] == 'resolve' for rule in document['route']['rules']) == 1
+    rules = unprotected_fixture(document)['route']['rules']
+    assert [rule['action'] for rule in rules] == ['sniff', 'route', 'route', 'route']
     assert rules[1]['inbound'] == ['compat:alice', 'compat:bob']
     assert 'bob' not in json.dumps(rules[3])
-    assert rules[3]['rules'] == [{'auth_user': ['shared:alice']}, {'inbound': ['compat:alice']}]
+    assert rules[3]['rules'][0]['rules'] == [{'auth_user': ['shared:alice']}, {'inbound': ['compat:alice']}]

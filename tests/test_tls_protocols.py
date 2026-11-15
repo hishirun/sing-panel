@@ -6,7 +6,7 @@ import pytest
 from panel.core import init_db,connect,records,set_memberships,config
 from panel.subscriptions import outbounds,native_subscription
 from panel.options import NodeOptions
-from panel.runtime import Runtime
+from loopback_fixture import LoopbackFixtureRuntime
 from test_integration import Handler,port,exchange
 BINARY=os.environ.get('SING_BOX')
 
@@ -26,7 +26,7 @@ def test_tls_protocol_real_connection_and_user_node_accounting(tmp_path,certific
         for uid in ['alice','bob']:
             c.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',(uid,uid,uid+'-secret-0123456789',uid,uid))
             set_memberships(c,uid,['tls-node'])
-    server=ThreadingHTTPServer(('127.0.0.1',0),Handler);rt=Runtime(BINARY,tmp_path,port())
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler);rt=LoopbackFixtureRuntime(BINARY,tmp_path,port())
     threading.Thread(target=server.serve_forever,daemon=True).start();client=None
     try:
         rt.apply()

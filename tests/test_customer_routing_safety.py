@@ -14,6 +14,7 @@ import pytest
 from panel import routing as r, user_routing as ur
 from panel.core import connect
 from test_user_routing import policy_db, draft, publish_for_test
+from loopback_fixture import unprotected_fixture_config
 
 
 def admin_rule(match, nodes=None, target='reject', identity='mandatory'):
@@ -145,10 +146,12 @@ def test_real_core_forced_ip_reject_cannot_be_bypassed_by_personal_resolve(polic
         r.write(policy_db, settings)
         publish_for_test(policy_db, 'alice', draft('allowed', kind='ip_cidr', values=['127.0.0.0/8']))
         ports = [free_port(), free_port(), free_port()]
-        document = ur.compose({'inbounds': [
+        document = unprotected_fixture_config(ur.compose, {'inbounds': [
             {'type': 'socks', 'tag': tag, 'listen': '127.0.0.1', 'listen_port': port}
             for tag, port in zip(('shared:alice', 'compat:alice', 'unrelated:bob'), ports)],
             'outbounds': [{'type': 'direct', 'tag': 'direct'}]}, policy_db)
+        # This fixture tests administrator-vs-personal precedence separately
+        # from system private-network protection, whose own suite retains it.
         # A local synthetic GeoIP set verifies the same compiled matcher without
         # downloading a changing country database or contacting an external site.
         if condition.get('geoip'):

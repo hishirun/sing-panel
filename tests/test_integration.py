@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import pytest
 from panel.core import init_db, connect, records, set_memberships
-from panel.runtime import Runtime
+from loopback_fixture import LoopbackFixtureRuntime
 from panel.subscriptions import outbounds
 
 BINARY=os.environ.get('SING_BOX')
@@ -48,7 +48,7 @@ def system(tmp_path,request):
             c.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',
                 (uid,uid,uid+'-user-secret-0123456789','11111111-1111-4111-8111-11111111111'+('1' if uid=='alice' else '2'),uid+'-token'))
             set_memberships(c,uid,['snell5','snell6','reality'])
-    rt=Runtime(BINARY,tmp_path,port())
+    rt=LoopbackFixtureRuntime(BINARY,tmp_path,port())
     rt.apply()
     yield rt,tmp_path
     rt.stop()

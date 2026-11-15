@@ -4,7 +4,7 @@ Run: PYTHONPATH=. SING_BOX=/path/to/sing-box python tests/traffic_audit.py
 import json, os, re, socket, subprocess, tempfile, threading, time, uuid
 from pathlib import Path
 from panel.core import init_db, connect, records, set_memberships
-from panel.runtime import Runtime
+from loopback_fixture import LoopbackFixtureRuntime
 from panel.subscriptions import outbounds
 from panel.stats import query
 
@@ -45,7 +45,7 @@ def audit(udp_reply_size=1024):
             for uid in ('audit','untouched'):
                 c.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',(uid,uid,'audit-user-secret-'+uid,str(uuid.uuid4()),str(uuid.uuid4())))
                 set_memberships(c,uid,[r['id'] for r in c.execute('SELECT id FROM nodes')])
-        rt=Runtime(BINARY,directory,port());rt.apply()
+        rt=LoopbackFixtureRuntime(BINARY,directory,port());rt.apply()
         try:
             outputs=outbounds(records(db,'users')[0],records(db,'nodes'),records(db,'memberships'),'127.0.0.1')
             for out in outputs:

@@ -468,6 +468,11 @@ def customer_psk(request: Request, token: str, csrf_token: str=Form(...), psk: s
     if not re.fullmatch(r'[A-Za-z0-9._~-]{12,255}',psk):
         raise HTTPException(422,'密码须为 12–255 个字母、数字或 . _ ~ - 字符')
     with runtime.lock, connect(DB) as db:
+        # Token rotation, account changes and traffic accounting share this
+        # lock. Revalidate after waiting so an already revoked link cannot
+        # leave a new credential behind.
+        user=subscription_user(token)
+        if reason(user):raise HTTPException(403,'当前订阅已停用，无法修改密码')
         db.execute('BEGIN IMMEDIATE')
         key='psk_changed:'+user['id']
         last=db.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()

@@ -128,7 +128,7 @@ def public_outbounds(path, user, settings=None):
         public = out['public']
         latency = cached(path, out)
         result.append({
-            'id': out['id'], 'name': public.get('name') or out['name'],
+            'id': out['id'], 'name': public.get('name') or '出口 ' + out['id'][:6],
             'region': public.get('region', ''), 'description': public.get('description', ''),
             'type': out['settings']['type'], 'enabled': bool(out['enabled']),
             'selectable': allowed_outbound(out, user, policy),
@@ -362,4 +362,5 @@ def compose(document, path, settings=None, policy_overrides=None):
     if sets:
         result['route']['rule_set'] = list(sets.values())
         result.setdefault('experimental', {}).setdefault('cache_file', {})['enabled'] = True
-    return result
+    from .routing_security import protect
+    return protect(result)

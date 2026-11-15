@@ -1,5 +1,7 @@
 # Hysteria2 / AnyTLS
 
+新机器使用自己的证书 lineage：将完整目录路径写入 root 所有的 `/etc/sing-panel/node-certificate-lineage`，例如 `/etc/letsencrypt/live/panel.example.com`。续期 hook 只读取该文本，不将其作为脚本执行；只处理匹配的证书，原子更新节点证书副本后重启面板，并在 Nginx 运行时校验配置、重载证书。未配置该文件时保留旧部署的默认 lineage。
+
 支持 sing-box 1.14.3；Hysteria2 需要 with_quic 编译选项。新协议与现有节点共用一个核心、用户额度、到期和周期重置规则。每用户密码来自用户的节点密码，统计名称为 node_id:user_id。无有效授权用户时不开放入站。
 
 ## 配置页面

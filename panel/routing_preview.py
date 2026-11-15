@@ -11,6 +11,7 @@ from pathlib import Path
 from . import routing, user_routing
 from .core import reason
 from .customer_routing_scope import nodes as scoped_nodes
+from .routing_security import blocked_destination
 
 
 def preview(m, user, policy, destination, node_id, mode='draft'):
@@ -100,6 +101,11 @@ def preview(m, user, policy, destination, node_id, mode='draft'):
                     'warning':'缺少规则集、目标 IP 或连接信息；需实际连接验证。'}
         return {**metadata,'summary':name+' → '+label,'rule_name':name,'outbound_name':label,'source':source,
                 'warning':note}
+
+    if blocked_destination(destination):
+        value=result('system','系统安全防护','reject')
+        value['warning']='代理连接不能访问本机、内网或云元数据地址。'
+        return value
 
     forced=[row for row in settings['rules'] if row.get('priority','forced')!='default']
     ordinary=[row for row in settings['rules'] if row.get('priority','forced')=='default']

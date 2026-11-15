@@ -4,7 +4,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 from panel import routing as r
 from panel.core import connect,init_db,records,set_memberships,config,current_config
-from panel.runtime import Runtime
+from loopback_fixture import LoopbackFixtureRuntime, unprotected_fixture
 from test_app import client,csrf
 from test_integration import Handler,port
 BINARY=os.environ.get('SING_BOX')
@@ -31,7 +31,7 @@ def test_admin_crud_import_secrets_rules_and_reference_guards(routing_client):
     assert r.load(m.DB)['outbounds'][0]['settings']['password']=='secret-123'
     c.post('/routing/rules/save',data={'token':t,'name':'Example','target':o['id'],'domain_suffix':'example.com','port':'443,8000-9000'})
     data=r.load(m.DB);assert len(data['rules'])==1
-    compiled=current_config(m.DB,m.STATS_PORT)
+    compiled=unprotected_fixture(current_config(m.DB,m.STATS_PORT))
     assert compiled['route']['rules'][0]['outbound']=='up-'+o['id']
     c.post('/routing/outbounds/'+o['id']+'/delete',data={'token':t})
     assert len(r.load(m.DB)['outbounds'])==1
@@ -39,7 +39,7 @@ def test_admin_crud_import_secrets_rules_and_reference_guards(routing_client):
     assert r.load(m.DB)['outbounds'][0]['enabled']
     rule=data['rules'][0]
     c.post('/routing/rules/'+rule['id']+'/toggle',data={'token':t})
-    assert not current_config(m.DB,m.STATS_PORT)['route']['rules']
+    assert not unprotected_fixture(current_config(m.DB,m.STATS_PORT))['route']['rules']
     c.post('/routing/rules/'+rule['id']+'/delete',data={'token':t})
     c.post('/routing/outbounds/'+o['id']+'/delete',data={'token':t})
     assert not r.load(m.DB)['outbounds']
@@ -117,7 +117,7 @@ def test_real_routing_through_upstream_default_and_reject(tmp_path,kind):
         set_memberships(c,'u',['n'])
     upstream_options=r.build_outbound({'type':kind,'server':'127.0.0.1','server_port':upstream_port,'username':'test','password':password,'method':method})
     rules={'outbounds':[{'id':'exit','name':'Exit','enabled':True,'settings':upstream_options}],'rules':[{'id':'one','name':'Test','enabled':True,'match':{'domain':['routed.invalid']},'target':'exit','node_ids':['n']}],'final':'direct','sniff':False}
-    r.write(db,rules);rt=Runtime(BINARY,tmp_path,port());client=None;clog=None
+    r.write(db,rules);rt=LoopbackFixtureRuntime(BINARY,tmp_path,port());client=None;clog=None
     try:
         rt.apply();user=records(db,'users')[0];outs=outbounds(user,records(db,'nodes'),records(db,'memberships'),'127.0.0.1')
         local=port();client_file=tmp_path/'client.json';client_file.write_text(json.dumps({'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':local}],'outbounds':outs}))
