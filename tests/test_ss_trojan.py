@@ -144,3 +144,10 @@ def test_subscription_formats_credentials_and_transport(tmp_path,certificate,pro
         body,count=ini_profile(outs,fmt,'https://example.com/s/test',users[0])
         assert count==(0 if tr=='grpc' or method.endswith('chacha20-poly1305') and method.startswith('2022-') else 1)
         if count:assert out['password'] in body and 'skip-cert-verify=true' not in body
+
+
+def test_tcp_only_ss_export_does_not_advertise_udp():
+    from panel.client_profiles import ini_proxy,mihomo_proxy
+    out={'type':'shadowsocks','tag':'TCP only','server':'example.com','server_port':12345,'method':'aes-128-gcm','password':'test-secret','network':'tcp'}
+    assert 'udp-relay=false' in ini_proxy(out)
+    assert mihomo_proxy(out)['udp'] is False

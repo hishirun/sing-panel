@@ -68,7 +68,7 @@ def ini_proxy(out, surfboard=False):
     prefix = f"{out['tag']} = {kind}, {ini_value(host)}, {out['server_port']}"
     if kind=='shadowsocks':
         if out['method']=='2022-blake3-chacha20-poly1305':return None
-        return f"{out['tag']} = ss, {ini_value(host)}, {out['server_port']}, encrypt-method={out['method']}, password={ini_value(out['password'])}, udp-relay=true"
+        return f"{out['tag']} = ss, {ini_value(host)}, {out['server_port']}, encrypt-method={out['method']}, password={ini_value(out['password'])}, udp-relay={str(out.get('network')!='tcp').lower()}"
     if kind=='trojan':
         transport=out.get('transport',{})
         if transport.get('type')=='grpc':return None
