@@ -15,9 +15,9 @@
 
 sing-box JSON 支持全部协议。Shadowrocket URI 导出 AnyTLS/Hysteria2（Gecko 除外）；Surge 导出目前仍仅包含兼容 Snell，不把未适配协议写入配置。
 
-## 当前部署
+## 部署示例
 
-2026-11-03 新增：Hysteria2 UDP 41579，AnyTLS TCP 58670，连接地址 203.0.113.10，SNI panel.example.com。正式 Hysteria2 使用 Salamander，混淆密码由服务端随机生成，只通过授权订阅分发。初始化只为 Example User 追加授权，原授权保留。
+例如 Hysteria2 使用 UDP 10443、AnyTLS 使用 TCP 10444；将连接地址 `203.0.113.10` 和 SNI `panel.example.com` 替换为自己的地址。Hysteria2 可使用 Salamander，混淆密码由服务端随机生成，只通过授权订阅分发。在用户管理中勾选需要授权的节点。
 
 使用 Let's Encrypt 公共证书，webroot 为 /var/lib/letsencrypt，CF 代理的 HTTP-01 验证目录由 Nginx 直接提供。节点直连 IP，不走小黄云。原网站代理方式和已有 443 服务不变。
 

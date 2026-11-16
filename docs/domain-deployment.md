@@ -1,6 +1,6 @@
-# panel.example.com 域名部署
+# 域名部署示例
 
-2026-10-11：A 记录 203.0.113.10，Cloudflare proxied=true。
+本文使用 `panel.example.com` 与文档专用地址 `203.0.113.10` 演示部署，安装前替换为自己的域名与源站 IP。Cloudflare A 记录可开启代理（proxied=true）。
 
 Nginx 监听 80，反代 127.0.0.1:18889。源站不安装证书，Cloudflare 到源站为 HTTP；浏览器到 Cloudflare 为 HTTPS。未改整个 zone 的 SSL 设置，既有 443 服务不修改。HTTP 访客自动转 HTTPS。
 

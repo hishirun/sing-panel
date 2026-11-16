@@ -14,6 +14,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --from=core /go/bin/sing-box /usr/local/bin/sing-box
+COPY --from=core /src/LICENSE /usr/local/share/doc/sing-box/LICENSE
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/sing-panel/
+COPY LICENSES /usr/local/share/doc/sing-panel/LICENSES
+COPY core-patches /usr/local/share/doc/sing-panel/core-patches
+COPY deploy/build-core.sh /usr/local/share/doc/sing-panel/deploy/build-core.sh
 COPY panel ./panel
 ENV PANEL_DATA=/data PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 10001:10001
