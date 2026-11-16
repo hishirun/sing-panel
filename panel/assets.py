@@ -1,5 +1,4 @@
 """Content-addressed public assets; private responses must never use this cache policy."""
-from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
@@ -19,15 +18,12 @@ def _asset_path(name: str) -> Path:
     return candidate
 
 
-@lru_cache(maxsize=256)
-def _digest(path: str, mtime_ns: int, ctime_ns: int, size: int) -> str:
-    return sha256(Path(path).read_bytes()).hexdigest()[:20]
-
 
 def asset_version(name: str) -> str:
     path = _asset_path(name)
-    stat = path.stat()
-    return _digest(str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+    # Filesystem timestamp precision differs across hosts. Content remains the
+    # authority even when a same-size replacement preserves modification time.
+    return sha256(path.read_bytes()).hexdigest()[:20]
 
 
 def asset_url(name: str) -> str:
