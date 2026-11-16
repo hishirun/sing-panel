@@ -231,8 +231,10 @@ class Publisher:
             self.fail(candidates, safe)
             log.warning('customer routing draft was not published', exc_info=True)
 
-    def reset_user(self, uid):
+    def reset_user(self, uid, authorize=None):
         with self.m.runtime.lock:
+            if authorize:
+                authorize()
             with connect(self.m.DB) as db:
                 if db.execute('SELECT 1 FROM routing_publish_journal').fetchone():
                     raise ValueError('上次应用仍在恢复，请联系管理员检查核心状态')
@@ -246,6 +248,8 @@ class Publisher:
         self.validate_documents(documents)
         validated = self.signatures(documents)
         with self.m.runtime.lock:
+            if authorize:
+                authorize()
             if user_routing.get_policy(self.m.DB, uid) != old:
                 raise ValueError('用户策略已变化，请刷新后重试')
             with connect(self.m.DB) as db:

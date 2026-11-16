@@ -2,6 +2,7 @@
 import re
 from urllib.parse import urlsplit,urlunsplit
 from starlette.responses import Response
+from starlette.concurrency import run_in_threadpool
 from .sharing import read_settings
 
 def validate_paths(admin, share):
@@ -24,10 +25,12 @@ class EntryPaths:
             # Agents use a fixed endpoint and independent bearer credentials.
             return await self.app(scope,receive,send)
         if scope['type']!='http':return await self.app(scope,receive,send)
-        settings=read_settings(self.db);admin=settings['admin_path'];share=settings['share_path']
-        path=scope['path'];internal=None
-        if path=='/health' or path.startswith('/static/') or path.startswith('/agent/'):internal=path
-        elif path.startswith(share+'/'):internal='/s/'+path[len(share)+1:]
+        path=scope['path']
+        if path=='/health' or path.startswith('/static/') or path.startswith('/agent/'):
+            return await self.app(scope,receive,send)
+        settings=await run_in_threadpool(read_settings,self.db)
+        admin=settings['admin_path'];share=settings['share_path'];internal=None
+        if path.startswith(share+'/'):internal='/s/'+path[len(share)+1:]
         elif admin and (path==admin or path.startswith(admin+'/')):internal=path[len(admin):] or '/'
         elif not admin and not path.startswith('/s/'):internal=path
         if internal is None:
@@ -37,8 +40,10 @@ class EntryPaths:
             return await Response(status_code=404)(scope,receive,send)
         scope=dict(scope,path=internal,raw_path=internal.encode())
         async def mapped_send(message):
-            if message['type']=='http.response.start':
-                current=read_settings(self.db)
+            if message['type']=='http.response.start' and any(
+                    key.lower() in (b'location',b'x-customer-login') for key,_ in message['headers']):
+                # POST may have changed the configured entry paths.
+                current=await run_in_threadpool(read_settings,self.db) if scope['method'] not in ('GET','HEAD') else settings
                 headers=[]
                 for key,value in message['headers']:
                     if key.lower() in (b'location', b'x-customer-login'):

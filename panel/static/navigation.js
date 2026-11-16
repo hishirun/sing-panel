@@ -15,7 +15,9 @@ window.panelAsyncForms=true;
   content.replaceChildren(...next.childNodes);content.dataset.admin=next.dataset.admin;document.title=html.title;
   const links=[...html.querySelectorAll('.admin-nav a')];document.querySelectorAll('.admin-nav a').forEach((a,i)=>{if(links[i]){a.href=links[i].href;a.classList.toggle('current',links[i].classList.contains('current'));}});
   if(push&&url!==location.href)history.pushState({panel:true},'',url);
-  for(const src of [...scripts,'/static/select.js?v=4'])await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=src;script.onload=()=>{script.remove();resolve();};script.onerror=reject;document.body.append(script);});
+  const scope=window.panelScope.signal;
+  await window.panelPageScripts.activate([...scripts,html.body.dataset.pageSelectSrc],{signal:scope});
+  if(scope.aborted)return;
   window.scrollTo(0,keepScroll?y:0);content.querySelector('h1')?.setAttribute('tabindex','-1');content.querySelector('h1')?.focus({preventScroll:true});
  }
  async function navigate(url,push=true){

@@ -146,6 +146,9 @@ def presence(path,connections,close,now=None):
                     close(item['id']);continue
                 entry['ips'].append(ip)
             entry['connections']+=1
+        for uid,entry in online.items():
+            if not entry['connections']:continue
             db.execute('UPDATE users SET last_seen=? WHERE id=?',(now,uid))
-            db.execute('INSERT INTO client_ips VALUES(?,?,?,?) ON CONFLICT(user_id,ip) DO UPDATE SET last_seen=excluded.last_seen',(uid,ip,now,now))
+            db.executemany('INSERT INTO client_ips VALUES(?,?,?,?) ON CONFLICT(user_id,ip) DO UPDATE SET last_seen=excluded.last_seen',
+                           [(uid,ip,now,now) for ip in entry['ips']])
     return online

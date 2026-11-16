@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (()=>{
  const list=document.getElementById('fleet-panel'),enroll=document.getElementById('fleet-enroll'),root=list||enroll;
  if(!root)return;
@@ -169,3 +171,5 @@
  if(enroll){expiry();expiryTimer=setInterval(expiry,1000);}
  poll();
 })();
+
+});

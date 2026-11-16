@@ -61,14 +61,47 @@ def install(app,m):
                 if row['match'].get('port_range'):values['port']=','.join(filter(None,[values.get('port',''),','.join(row['match']['port_range'])]))
                 values['match_all']=not row['match'] and not row.get('node_ids')
         return m.render(request,'routing_rule.html',row=row,values=values,geo_catalog=r.GEO_CATALOG,targets={'direct':'服务器直连','reject':'拦截',**{o['id']:o['name'] for o in data['outbounds'] if o['enabled']}},nodes=records(m.DB,'nodes'),error=error)
-    def apply_change(change,action=None,detail=''):
+    def authorize(request,token):
+        m.authenticated(request)
+        m.csrf(request,token)
+    def documents(settings):
+        from .user_routing import compose
+        nodes,users,members=(records(m.DB,table) for table in ('nodes','users','memberships'))
+        result={}
+        for server in sorted({'local'}|{node.get('server_id','local') for node in nodes}):
+            owned=[node for node in nodes if node.get('server_id','local')==server]
+            identities={node['id'] for node in owned}
+            document=compose(config(owned,users,[row for row in members if row['node_id'] in identities],
+                                    m.STATS_PORT if server=='local' else 19190),m.DB,settings=settings)
+            r.set_rule_paths(document,m.DIRECTORY)
+            result[server]=document
+        return result
+    def signature(value):
+        return json.dumps(value,sort_keys=True,separators=(',',':'))
+    def apply_change(request,token,change,action=None,detail='',expected=None):
+        # Snapshot only while holding the runtime lock. Slow network downloads
+        # and subprocess validation must not pause traffic accounting or WSS.
         with m.runtime.lock:
+            authorize(request,token)
             old=r.load(m.DB);new=copy.deepcopy(old)
+            if expected is not None and old!=expected:
+                raise HTTPException(409,'分流配置已变化，请刷新后重试')
             change(new)
-            from .user_routing import compose
-            document=compose(config(records(m.DB,'nodes'),records(m.DB,'users'),records(m.DB,'memberships'),m.STATS_PORT),m.DB,settings=new)
+            prepared=documents(new)
+            validated=signature(prepared)
+        for document in prepared.values():
             r.prepare_rule_sets(document,m.DIRECTORY,m.BINARY)
             m.check_document(document)
+        with m.runtime.lock:
+            authorize(request,token)
+            if r.load(m.DB)!=old:
+                raise HTTPException(409,'分流配置已变化，请刷新后重试')
+            # Repeat reference/permission checks, then compare semantic core
+            # configuration. Routine traffic counters do not invalidate edits.
+            current=copy.deepcopy(old)
+            change(current)
+            if current!=new or signature(documents(current))!=validated:
+                raise HTTPException(409,'节点或用户分流配置已变化，请刷新后重试')
             r.write(m.DB,new)
             try:m.runtime.apply()
             except Exception:
@@ -76,7 +109,7 @@ def install(app,m):
                 try:m.runtime.apply()
                 except Exception:pass
                 raise ValueError('应用失败，已恢复原分流设置；请检查上游配置或核心状态')
-        if action:log(action,detail)
+            if action:log(action,detail)
     def log(action,detail):
         with connect(m.DB) as db:audit(db,action,detail)
     async def form(request):
@@ -111,12 +144,12 @@ def install(app,m):
         from .user_routing import get_policy,configure_user,restore_policy
         def update_policy():
             if raw.get('intent')=='reset':
-                m.authenticated(request)
-                m.routing_publisher.reset_user(identity)
+                authorize(request,str(raw.get('token','')))
+                m.routing_publisher.reset_user(identity,authorize=lambda:authorize(request,str(raw.get('token',''))))
                 log('恢复用户默认分流',user['name'])
                 return '默认策略已发布，相关机器确认后生效'
             with m.runtime.lock:
-                m.authenticated(request)
+                authorize(request,str(raw.get('token','')))
                 old=get_policy(m.DB,identity)
                 if old.get('status') in ('queued','applying'):
                     raise ValueError('用户策略正在应用，请完成后再修改权限')
@@ -151,7 +184,8 @@ def install(app,m):
     @app.post('/routing/outbounds/save')
     async def save_outbound(request:Request):
         raw=await form(request);identity=str(raw.get('id',''))
-        old=find(r.load(m.DB)['outbounds'],identity) if identity else None
+        expected=r.load(m.DB)
+        old=find(expected['outbounds'],identity) if identity else None
         try:
             if raw.get('intent')=='import':
                 values=r.parse_uri(str(raw.get('uri','')))
@@ -163,11 +197,12 @@ def install(app,m):
             disclosure=public_input(raw,records(m.DB,'users'),old)
             entry={'id':identity or uuid.uuid4().hex,'name':name,'enabled':old['enabled'] if old else True,'settings':settings,'public':disclosure}
             def change(data):
+                public_input(raw,records(m.DB,'users'),old)
                 if old:data['outbounds'][data['outbounds'].index(find(data['outbounds'],identity))]=entry
                 else:
                     if len(data['outbounds'])>=100:raise ValueError('最多添加 100 个上游出口')
                     data['outbounds'].append(entry)
-            await run_in_threadpool(apply_change,change,'保存分流出口',name)
+            await run_in_threadpool(apply_change,request,str(raw.get('token','')),change,'保存分流出口',name,expected)
             return RedirectResponse('/routing',303)
         except (ValueError,TypeError) as e:return outbound_form(request,old,dict(raw),str(e),public=public_values(old,raw))
 
@@ -180,7 +215,7 @@ def install(app,m):
 
     @app.post('/routing/outbounds/{identity}/{action}')
     async def outbound_action(request:Request,identity:str,action:str):
-        await form(request)
+        raw=await form(request)
         try:
             data=r.load(m.DB);entry=find(data['outbounds'],identity)
             if action=='test':
@@ -199,7 +234,7 @@ def install(app,m):
                     raise ValueError('此出口正被用户已应用的规则引用，请先调整对应用户的规则或恢复其默认分流')
                 if action=='delete':data['outbounds'].remove(row)
                 else:row['enabled']=not row['enabled']
-            await run_in_threadpool(apply_change,change,'分流出口 '+action,entry['name'])
+            await run_in_threadpool(apply_change,request,str(raw.get('token','')),change,'分流出口 '+action,entry['name'],data)
             return RedirectResponse('/routing',303)
         except ValueError as e:return page(request,error=str(e))
 
@@ -219,11 +254,12 @@ def install(app,m):
             if priority not in ('forced','default'):raise ValueError('请选择有效的规则优先级')
             row={'id':identity or uuid.uuid4().hex,'enabled':old['enabled'] if old else True,'priority':priority,**values}
             def change(data):
+                r.rule_input(raw,records(m.DB,'nodes'),data['outbounds'])
                 if old:data['rules'][data['rules'].index(find(data['rules'],identity))]=row
                 else:
                     if len(data['rules'])>=200:raise ValueError('最多添加 200 条规则')
                     data['rules'].append(row)
-            await run_in_threadpool(apply_change,change,'保存分流规则',row['name'])
+            await run_in_threadpool(apply_change,request,str(raw.get('token','')),change,'保存分流规则',row['name'],data)
             return RedirectResponse('/routing',303)
         except (ValueError,TypeError) as e:
             values=dict(raw);values['node_ids']=raw.getlist('node_ids');values['geoip']=raw.getlist('geoip');values['geosite']=raw.getlist('geosite');return rule_form(request,old,values,str(e))
@@ -237,7 +273,7 @@ def install(app,m):
 
     @app.post('/routing/rules/{identity}/{action}')
     async def rule_action(request:Request,identity:str,action:str):
-        await form(request)
+        raw=await form(request)
         try:
             if action not in ('toggle','delete','up','down'):raise HTTPException(404)
             def change(data):
@@ -250,7 +286,7 @@ def install(app,m):
                     if 0<=position<len(same):
                         other=same[position]
                         data['rules'][index],data['rules'][other]=data['rules'][other],data['rules'][index]
-            await run_in_threadpool(apply_change,change,'分流规则 '+action,identity)
+            await run_in_threadpool(apply_change,request,str(raw.get('token','')),change,'分流规则 '+action,identity)
             return RedirectResponse('/routing',303)
         except ValueError as e:return page(request,error=str(e))
 
@@ -259,7 +295,7 @@ def install(app,m):
         raw=await form(request)
         try:
             def change(data):data.update(final=str(raw.get('final','direct')),sniff=r.truth(raw.get('sniff')))
-            await run_in_threadpool(apply_change,change,'修改默认出口')
+            await run_in_threadpool(apply_change,request,str(raw.get('token','')),change,'修改默认出口')
             return RedirectResponse('/routing',303)
         except ValueError as e:return page(request,error=str(e))
 

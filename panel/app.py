@@ -21,8 +21,10 @@ from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from .paths import EntryPaths
+from .assets import asset_url, asset_is_versioned
 from .sharing import share_context, read_settings, save_settings, qr_image, Monitor
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.concurrency import run_in_threadpool
 from .core import init_db, connect, records, reason, PROTOCOLS, set_memberships, random_port, port_available, rotate_ports
 from .runtime import Runtime
 from .backups import Manager as BackupManager
@@ -44,6 +46,7 @@ runtime = Runtime(BINARY, DIRECTORY, STATS_PORT)
 backup_manager = BackupManager(DB,DIRECTORY)
 ph = PasswordHasher()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
+templates.env.globals['asset_url'] = asset_url
 templates.env.filters['bytes'] = lambda n: f'{n / 1024**3:.2f} GiB'
 templates.env.filters['traffic_bytes'] = lambda n: f'{n / 1024**3:.2f} GiB' if n>=1024**3 else f'{n / 1024**2:.2f} MiB' if n>=1024**2 else f'{n / 1024:.2f} KiB' if n>=1024 else f'{n} B'
 templates.env.filters['datetime'] = lambda n: datetime.fromtimestamp(n,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if n else '暂无'
@@ -80,6 +83,12 @@ app.add_middleware(EntryPaths, db=DB)
 async def headers(request, call_next):
     response = await call_next(request)
     response.headers['Cache-Control'] = 'no-store'
+    if request.url.path.startswith('/static/') and request.method in ('GET','HEAD'):
+        # Static files are public and must not refresh or cache an admin session.
+        if 'set-cookie' in response.headers:del response.headers['set-cookie']
+        versioned=await run_in_threadpool(asset_is_versioned,request.url.path,request.query_params.get('v'))
+        if response.status_code in (200,304) and versioned:
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
@@ -268,6 +277,10 @@ def check_document(document):
 async def save_node(request,identity=None):
     authenticated(request)
     raw=dict(await request.form())
+    return await run_in_threadpool(save_node_sync,request,raw,identity)
+
+def save_node_sync(request,raw,identity=None):
+    authenticated(request)
     csrf(request,str(raw.get('token','')))
     node=next((n for n in records(DB,'nodes') if n['id']==identity),None) if identity else None
     if identity and not node:raise HTTPException(404)
@@ -295,6 +308,7 @@ async def save_node(request,identity=None):
         if raw.get('intent')=='probe':
             if protocol!='reality':raise ValueError('只有 Reality 节点需要 TLS 握手检测')
             result=probe_tls(settings.handshake_host or sni,settings.handshake_port,sni)
+            authenticated(request)
             return editor(request,node,raw,notice=result)
         name=valid_name(str(raw.get('name','')))
         with connect(DB) as db:
@@ -330,7 +344,14 @@ async def save_node(request,identity=None):
         document=config([candidate],[test_user],[{'node_id':candidate['id'],'user_id':'validation','port':port}],STATS_PORT)
         check_document(document)
         with runtime.lock, connect(DB) as db:
+            authenticated(request)
+            csrf(request,str(raw.get('token','')))
             db.execute('BEGIN IMMEDIATE')
+            current=db.execute('SELECT * FROM nodes WHERE id=?',(identity,)).fetchone() if identity else None
+            if node and (not current or any(current[key]!=node[key] for key in current.keys())):
+                raise HTTPException(409,'节点已被修改，请刷新后重试')
+            if server_id!='local' and not db.execute('SELECT 1 FROM servers WHERE id=? AND enabled=1',(server_id,)).fetchone():
+                raise HTTPException(409,'服务器状态已变更，请刷新后重试')
             if server_id=='local' and (not node or port != node['port']) and not port_available(port):
                 raise ValueError('该端口已被系统中的服务占用')
             grants=db.execute('SELECT count(*) FROM memberships WHERE node_id=?',(candidate['id'],)).fetchone()[0]
@@ -437,8 +458,16 @@ async def settings_save(request: Request):
     authenticated(request)
     raw=dict(await request.form())
     csrf(request,str(raw.get('token','')))
+    return await run_in_threadpool(settings_save_sync,request,raw)
+
+def settings_save_sync(request,raw):
+    authenticated(request)
+    csrf(request,str(raw.get('token','')))
     try:
-        save_settings(DB,raw)
+        with runtime.lock:
+            authenticated(request)
+            csrf(request,str(raw.get('token','')))
+            save_settings(DB,raw)
     except ValueError as e:
         return render(request,'settings.html',settings=raw,error=str(e))
     return RedirectResponse('/settings',status_code=303)
@@ -460,15 +489,26 @@ def customer(request: Request, token: str, changed: bool=False, period: str="7d"
     response.headers['Vary'] = 'User-Agent'
     return response
 
+@app.get('/s/{token}/traffic', response_class=HTMLResponse)
+def customer_traffic(request: Request, token: str, period: str='7d'):
+    user=user_authenticated(request,token,DB)
+    from .traffic import traffic_view
+    with connect(DB) as db:
+        nodes=[dict(r) for r in db.execute('SELECT n.id,n.name FROM nodes n JOIN memberships m ON m.node_id=n.id WHERE m.user_id=?',(user['id'],))]
+        today=datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        usage=db.execute('SELECT upload,download,upload+download total FROM daily WHERE user_id=? AND day=?',(user['id'],today)).fetchone()
+    return render(request,'customer_traffic.html',traffic=traffic_view(DB,user['id'],nodes,period),
+                  today_usage=dict(usage) if usage else {'upload':0,'download':0,'total':0},subtoken=token)
+
 @app.get('/s/{token}/qr/{kind}')
 def customer_qr(request: Request, token: str, kind: str):
     user=user_authenticated(request,token,DB)
-    context=share_context(DB,user,PUBLIC_HOST,read_settings(DB)['public_url'] or str(request.base_url).rstrip('/'))
-    if kind=='page':
-        text=context['share_url']
-    elif kind=='subscription':
-        text=context['share_url']
+    settings=read_settings(DB)
+    base=settings['public_url'] or str(request.base_url).rstrip('/')
+    if kind in ('page','subscription'):
+        text=base+settings['share_path']+'/'+token
     else:
+        context=share_context(DB,user,PUBLIC_HOST,base)
         node=next((n for n in context['nodes'] if n['id']==kind),None)
         if not node or not node['uri']:raise HTTPException(404)
         text=node['uri']

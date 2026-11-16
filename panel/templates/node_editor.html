@@ -55,4 +55,4 @@
 <label>Keep Alive 空闲 / 秒<input type="number" name="keep_alive" min="1" max="86400" value="{{ values.keep_alive }}" required></label>
 <label>Keep Alive 间隔 / 秒<input type="number" name="keep_alive_interval" min="1" max="3600" value="{{ values.keep_alive_interval }}" required></label>
 </div><p class="muted"><small>Fast Open 与 Multipath TCP 需要系统及对端支持；开启不代表系统一定启用。关闭 Keep Alive 时两个时间项不会参与核心配置。</small></p></section>{% endif %}<section><h2>配置检查</h2><p class="muted">保存前校验字段并执行 sing-box check。首次添加无授权用户时，节点不监听端口；授权后自动应用。</p><button name="intent" value="save" class="primary">{{ '保存节点配置' if node else '创建节点' }}</button></section></aside></div></form>
-<script src="/static/node-options.js?v=1" defer></script>{% endblock %}
+<script src="{{ asset_url('node-options.js') }}" defer></script>{% endblock %}

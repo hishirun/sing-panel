@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (() => {
   const select=document.getElementById('hy-obfs');
   const mode=document.querySelector('[name="mode"]');
@@ -21,3 +23,5 @@
   };
   window.panelListen(document,'change',refresh);refresh();
 })();
+
+});

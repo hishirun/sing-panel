@@ -64,7 +64,9 @@ document.addEventListener('click', event => {
       document.querySelectorAll('.page-nav a').forEach((link, index) => { const value = nextLinks[index]?.getAttribute('aria-current'); if (value) link.setAttribute('aria-current', value); else link.removeAttribute('aria-current'); });
       if (push) history.pushState(null, '', url);
       displayedURL = url;
-      for (const src of scripts) await new Promise((resolve, reject) => { const script = document.createElement('script'); script.src = src; script.onload = () => { script.remove(); resolve(); }; script.onerror = reject; document.body.append(script); });
+      const scope = window.panelScope.signal;
+      await window.panelPageScripts.activate(scripts, {signal: scope});
+      if (scope.aborted || id !== sequence) return;
       const target = new URL(url).hash ? document.getElementById(decodeURIComponent(new URL(url).hash.slice(1))) : null;
       if (target) target.scrollIntoView({behavior: 'instant'}); else window.scrollTo(0, 0);
       const heading = content().querySelector('h1'); heading?.setAttribute('tabindex', '-1'); heading?.focus({preventScroll: true});

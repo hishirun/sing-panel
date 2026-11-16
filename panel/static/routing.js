@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (() => {
   const form=document.getElementById('outbound-form');if(!form)return;
   const type=form.elements.namedItem('type'),tls=form.elements.namedItem('tls_mode'),transport=form.elements.namedItem('transport');
@@ -17,3 +19,5 @@
   };
   form.addEventListener('change',refresh);refresh();
 })();
+
+});

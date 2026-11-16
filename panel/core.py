@@ -72,6 +72,9 @@ def init_db(path):
         if 'options' not in {r[1] for r in db.execute('PRAGMA table_info(nodes)')}:
             db.execute("ALTER TABLE nodes ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_member_port ON memberships(port) WHERE port>0')
+        db.execute('CREATE INDEX IF NOT EXISTS daily_user_day ON daily(user_id,day)')
+        db.execute('CREATE INDEX IF NOT EXISTS node_daily_user_day ON node_daily(user_id,day,node_id)')
+        db.execute('CREATE INDEX IF NOT EXISTS node_hourly_user_hour ON node_hourly(user_id,hour,node_id)')
         from .management import migrate
         migrate(db)
         from .user_routing import migrate as migrate_user_routing
@@ -191,6 +194,9 @@ def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=Fal
                     continue
                 raise ValueError('counter regressed inside one core epoch')
             delta = value-(previous[0] if previous else 0)
+            # Keep initial baselines, but an unchanged counter has no new usage.
+            if previous and not delta:
+                continue
             if delta>0:
                 db.execute('UPDATE users SET last_seen=? WHERE id=?',(int(time.time()),user))
                 row=db.execute('SELECT policy,activated_at FROM users WHERE id=?',(user,)).fetchone()

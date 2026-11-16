@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 window.panelListen(document,'click', async event => {
   const button = event.target.closest('[data-copy]');
   if (!button) return;
@@ -89,6 +91,8 @@ window.panelListen(document,'change', event => {
 
 (() => {
   let pending;
+  const scope = window.panelScope.signal;
+  scope.addEventListener('abort', () => pending?.abort(), {once: true});
   async function updateTraffic(url, push) {
     if (pending) pending.abort();
     const controller = new AbortController();
@@ -99,12 +103,20 @@ window.panelListen(document,'change', event => {
     let message = panel.querySelector('[data-traffic-error]');
     if (message) message.remove();
     try {
-      const response = await fetch(url, {signal: controller.signal, cache: 'no-store', headers: {'Accept': 'text/html'}});
+      const requested = new URL(url, location.href);
+      const share = document.getElementById('customer-content')?.dataset.shareUrl;
+      if (!share) throw new Error('Missing share page');
+      const endpoint = new URL(share, location.href);
+      endpoint.pathname = endpoint.pathname.replace(/\/$/, '') + '/traffic';
+      endpoint.search = new URLSearchParams({period: requested.searchParams.get('period') || '7d'}).toString();
+      endpoint.hash = '';
+      const response = await fetch(endpoint, {signal: controller.signal, credentials: 'same-origin', cache: 'no-store', headers: {'Accept': 'text/html'}});
       if (window.customerAuthRedirect?.(response)) return;
       if (!response.ok || response.redirected) throw new Error('Unavailable');
       const page = new DOMParser().parseFromString(await response.text(), 'text/html');
       const next = page.querySelector('#traffic');
       if (!next) throw new Error('Missing traffic');
+      if (scope.aborted || controller.signal.aborted || pending !== controller || !panel.isConnected) return;
       const expanded = panel.querySelector('details')?.open;
       if (expanded && next.querySelector('details')) next.querySelector('details').open = true;
       const focused = panel.contains(document.activeElement);
@@ -113,7 +125,7 @@ window.panelListen(document,'change', event => {
       if (push) history.pushState(null, '', url);
       if (focused) next.querySelector('.period-switch .selected')?.focus({preventScroll: true});
     } catch (error) {
-      if (error.name !== 'AbortError') {
+      if (error.name !== 'AbortError' && !scope.aborted && panel.isConnected) {
         message = document.createElement('p');
         message.dataset.trafficError = '';
         message.className = 'bad';
@@ -142,3 +154,5 @@ window.panelListen(document,'change', event => {
     if (current !== requested) updateTraffic(location.href, false);
   });
 })();
+
+});

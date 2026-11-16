@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (()=>{
  const root=document.getElementById('user-node-picker');if(!root)return;
  const groups=[...root.querySelectorAll('[data-node-group]')];
@@ -35,3 +37,5 @@
  window.panelListen(root.closest('form'),'reset',()=>queueMicrotask(()=>{refresh();search();}));
  refresh();search();
 })();
+
+});

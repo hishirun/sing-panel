@@ -18,7 +18,8 @@ DEFAULT_TARGETS='Cloudflare,www.cloudflare.com,443\nMicrosoft,www.microsoft.com,
 def read_settings(path):
     result={'brand':'SingBox面板','theme':'glass','public_url':'','support':'','monitor_targets':DEFAULT_TARGETS,'admin_path':'','share_path':'/s'}
     with connect(path) as db:
-        result.update({r['key']:r['value'] for r in db.execute('SELECT * FROM settings') if r['key'] in result})
+        result.update({r['key']:r['value'] for r in db.execute(
+            'SELECT key,value FROM settings WHERE key IN ('+','.join('?' for _ in result)+')',tuple(result))})
     return result
 
 def parse_targets(text):
@@ -87,7 +88,6 @@ def share_context(path,user,host,base):
     reset_eta=(f'{reset_hours//24} 天 {reset_hours%24} 小时后' if reset_hours>=24 else f'{reset_hours} 小时后') if reset_hours else '即将重置'
     pending_days=json.loads(user.get('policy','{}')).get('first_use_days',0) if not user.get('activated_at') else 0
     with connect(path) as db:
-        daily=[dict(r) for r in db.execute('SELECT day,upload,download,upload+download total FROM daily WHERE user_id=? ORDER BY day DESC LIMIT 30',(user['id'],))]
         today=datetime.now(timezone.utc).date()
         saved={r['day']:r for r in db.execute('SELECT day,upload,download FROM daily WHERE user_id=? AND day>=?',(user['id'],str(today-timedelta(days=29))))}
         daily=[]

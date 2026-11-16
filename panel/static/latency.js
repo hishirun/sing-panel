@@ -1,1 +1,5 @@
+'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
 (()=>{window.panelListen(document,'click',async event=>{const button=event.target.closest('[data-latency]');if(!button)return;const url=button.dataset.latency;const buttons=[...document.querySelectorAll('[data-latency]')].filter(b=>b.dataset.latency===url);if(button.disabled)return;buttons.forEach(b=>{b.disabled=true;b.textContent='测试中…';});try{const data=new FormData();data.set('token',button.dataset.token);const r=await fetch(url,{method:'POST',body:data,signal:window.panelScope.signal});if(!r.ok)throw Error();const result=await r.json();document.querySelectorAll('[data-latency-time]').forEach(el=>{if(el.dataset.latencyTime===url)el.textContent=new Date(result.checked_at*1000).toLocaleString();});buttons.forEach(b=>{b.textContent=result.delay==null?'不可达 · 重测':result.delay+' ms';b.title='上次测速：'+new Date(result.checked_at*1000).toLocaleString();});}catch(e){if(e.name!=='AbortError'){buttons.forEach(b=>b.textContent='失败 · 重测');window.panelToast('测速失败，请重试',true);}}finally{buttons.forEach(b=>b.disabled=false);}});})();
+
+});

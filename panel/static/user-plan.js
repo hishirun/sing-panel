@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (() => {
   const amount = document.getElementById('quota-amount');
   if (!amount) return;
@@ -28,3 +30,5 @@
   form.addEventListener('change',refresh);
   refresh();
 })();
+
+});

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 from .core import connect, records, reason, set_memberships, random_port
 from .management import audit, bounded, policy_input, external_input, refresh_external, SCHEMES, maintain
 from urllib.parse import urlsplit
@@ -17,6 +18,9 @@ from urllib.parse import urlsplit
 
 def install(app,m):
     def redirect(path):return RedirectResponse(path,status_code=303)
+    def authorize(request,form):
+        m.authenticated(request)
+        m.csrf(request,str(form.get('token','')))
     def raw_user(raw,old=None):
         quota,expires=m.validate_limits(float(raw.get('quota_gib',0)),str(raw.get('expiry','')))
         if not math.isfinite(float(raw.get('quota_gib',0))):raise ValueError('额度必须是有限数值')
@@ -84,13 +88,18 @@ def install(app,m):
 
     async def save(request,identity=None):
         m.authenticated(request);form=await request.form();raw=dict(form);m.csrf(request,str(raw.get('token','')))
-        old=next((u for u in records(m.DB,'users') if u['id']==identity),None)
-        if identity and not old:raise HTTPException(404)
+        return await run_in_threadpool(save_user,request,form,raw,identity)
+
+    def save_user(request,form,raw,identity):
         try:
-            values=raw_user(raw,old);quantity=1 if old else bounded(raw,'quantity',1,1,200)
             ids=form.getlist('node_ids')
             with m.runtime.lock,connect(m.DB) as db:
+                authorize(request,form)
                 db.execute('BEGIN IMMEDIATE')
+                row=db.execute('SELECT * FROM users WHERE id=?',(identity,)).fetchone() if identity else None
+                old=dict(row) if row else None
+                if identity and not old:raise HTTPException(404)
+                values=raw_user(raw,old);quantity=1 if old else bounded(raw,'quantity',1,1,200)
                 if not set(ids)<={n['id'] for n in db.execute('SELECT id FROM nodes')}:raise ValueError('授权节点不存在')
                 for index in range(quantity):
                     uid=identity or uuid.uuid4().hex
@@ -114,6 +123,10 @@ def install(app,m):
     @app.post('/users/bulk')
     async def bulk(request:Request):
         m.authenticated(request);form=await request.form();m.csrf(request,str(form.get('token','')))
+        return await run_in_threadpool(bulk_users,request,form)
+
+    def bulk_users(request,form):
+        authorize(request,form)
         ids=list(dict.fromkeys(form.getlist('ids')));action=str(form.get('action',''))
         if not ids or len(ids)>200:raise HTTPException(422,'请选择 1–200 位用户')
         try:
@@ -121,6 +134,7 @@ def install(app,m):
                 selected=[u for u in records(m.DB,'users') if u['id'] in ids]
                 caches={u['id']:(u['external_links'],refresh_external(u['external_links'])) for u in selected}
             with m.runtime.lock:
+                authorize(request,form)
                 if action in ('reset','cleanup'):m.runtime.sample()
                 if action=='disconnect':
                     for identity in ids:m.runtime.disconnect(identity)
@@ -185,9 +199,13 @@ def install(app,m):
     @app.post('/nodes/bulk')
     async def nodes_bulk(request:Request):
         m.authenticated(request);form=await request.form();m.csrf(request,str(form.get('token','')))
+        return await run_in_threadpool(update_nodes,request,form)
+
+    def update_nodes(request,form):
         ids=list(dict.fromkeys(form.getlist('ids')));action=form.get('action')
         if not ids or len(ids)>200:raise HTTPException(422,'请选择 1–200 个节点')
         with m.runtime.lock,connect(m.DB) as db:
+            authorize(request,form)
             db.execute('BEGIN IMMEDIATE')
             if not set(ids)<={r['id'] for r in db.execute('SELECT id FROM nodes')}:raise HTTPException(422,'节点不存在')
             for identity in ids:
@@ -212,7 +230,11 @@ def install(app,m):
     @app.post('/system/restart')
     async def restart(request:Request):
         m.authenticated(request);form=await request.form();m.csrf(request,str(form.get('token','')))
+        return await run_in_threadpool(restart_core,request,form)
+
+    def restart_core(request,form):
         with m.runtime.lock:
+            authorize(request,form)
             m.runtime.sample();m.runtime.terminate();m.runtime.apply()
             with connect(m.DB) as db:audit(db,'重启核心','管理员手动重启')
         return redirect('/system/status')
@@ -222,17 +244,29 @@ def install(app,m):
         m.authenticated(request)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'panel.db'
-            with m.runtime.lock,connect(m.DB) as source,sqlite3.connect(path) as destination:source.backup(destination)
+            with m.runtime.lock,connect(m.DB) as source,sqlite3.connect(path) as destination:
+                m.authenticated(request)
+                source.backup(destination)
             return Response(path.read_bytes(),media_type='application/octet-stream',headers={'Content-Disposition':'attachment; filename="sing-panel-backup.db"'})
 
     @app.post('/system/password')
     async def password(request:Request):
         m.authenticated(request);form=await request.form();m.csrf(request,str(form.get('token','')))
-        try:m.ph.verify(m.auth['password_hash'],str(form.get('current_password','')))
+        return await run_in_threadpool(change_password,request,form)
+
+    def change_password(request,form):
+        with m.runtime.lock:
+            authorize(request,form)
+            previous=dict(m.auth)
+        try:m.ph.verify(previous['password_hash'],str(form.get('current_password','')))
         except Exception:raise HTTPException(403,'当前密码不正确')
         value=str(form.get('new_password',''))
         if len(value)<12 or len(value)>256:raise HTTPException(422,'新密码须为 12–256 个字符')
-        updated={**m.auth,'password_hash':m.ph.hash(value),'revision':m.auth.get('revision',0)+1}
-        path=m.AUTH.with_suffix('.tmp');path.write_text(json.dumps(updated));path.chmod(0o600);path.replace(m.AUTH);m.auth.update(updated);request.session['auth_revision']=updated['revision']
-        with connect(m.DB) as db:audit(db,'修改管理员密码','管理员')
+        encoded=m.ph.hash(value)
+        with m.runtime.lock:
+            authorize(request,form)
+            if m.auth!=previous:raise HTTPException(409,'管理员登录信息已变化，请重新登录后重试')
+            updated={**previous,'password_hash':encoded,'revision':previous.get('revision',0)+1}
+            path=m.AUTH.with_suffix('.tmp');path.write_text(json.dumps(updated));path.chmod(0o600);path.replace(m.AUTH);m.auth.update(updated);request.session['auth_revision']=updated['revision']
+            with connect(m.DB) as db:audit(db,'修改管理员密码','管理员')
         return redirect('/system/status')

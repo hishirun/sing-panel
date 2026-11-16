@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (() => {
   document.querySelectorAll('.admin-shell .table-wrap table').forEach(table=>{
     const headings=[...table.querySelectorAll('thead th')].map(th=>th.textContent.trim());
@@ -44,3 +46,5 @@
   window.panelListen(document,'pointerdown',e=>{if(opened&&!opened.popup.contains(e.target)&&!opened.button.contains(e.target))close();});
   window.panelListen(window,'resize',close);window.panelListen(window,'scroll',e=>{if(opened&&!opened.popup.contains(e.target))close();},true);
 })();
+
+});

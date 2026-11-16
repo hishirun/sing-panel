@@ -10,5 +10,5 @@
 <section class="fleet-connection"><div class="fleet-step" aria-hidden="true">2</div><div class="fleet-connection-body"><h2 data-fleet-enroll-title>等待 Agent 连接</h2><p class="muted" data-fleet-enroll-message>执行命令后，此处会自动显示连接结果。</p><span class="fleet-connection-indicator" data-fleet-enroll-status>等待接入</span><div class="fleet-install-actions" data-fleet-enroll-next hidden><a class="button primary" href="{{ admin_path }}/nodes/new?server_id={{ server.id }}">为这台服务器创建节点</a><a class="button" href="{{ admin_path }}/servers">查看服务器状态</a></div></div></section>
 <p class="fleet-footnote" data-fleet-refresh>安装后由 Agent 主动连接主面板，无需开放管理端口。</p>
 </div>
-<script src="/static/fleet.js?v=2" defer></script>
+<script src="{{ asset_url('fleet.js') }}" defer></script>
 {% endblock %}

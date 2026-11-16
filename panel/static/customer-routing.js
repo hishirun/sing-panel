@@ -1,4 +1,6 @@
 'use strict';
+window.panelPageScripts.register(document.currentScript.src, () => {
+'use strict';
 (() => {
   const root = document.getElementById('customer-routing');
   if (!root) return;
@@ -700,3 +702,5 @@
   listen(document, 'visibilitychange', () => schedulePoll(!document.hidden));
   render(); schedulePoll();
 })();
+
+});
