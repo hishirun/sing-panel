@@ -4,7 +4,7 @@
 
 用户可见信息、系统网络隔离及部署要求见 [安全说明](docs/security.md)。
 
-- 节点管理：Snell v5 / v6、VLESS + Reality、Hysteria2、AnyTLS，按服务器创建、启停和授权。
+- 节点管理：Snell v5 / v6、VLESS + Reality、Hysteria2、AnyTLS、SS / SS2022、Trojan，按服务器创建、启停和授权。
 - 服务器管理：WSS 接入、一次性 Linux 安装命令、资源与网卡状态、配置同步、核心启停及 Agent 更新。
 - 用户管理：按机器选择节点、跨机器共享流量额度、到期停用、手动停用、用量重置。
 - 机器额度：整机主网卡月流量，接收／发送／双向计费，UTC+8 月度重置及超额暂停。
@@ -87,7 +87,7 @@ export PANEL_PUBLIC_HOST=127.0.0.1
 
 正常停止会采集最后一份统计。核心崩溃、主机断电可能丢失最后一次未采样流量；正常重启也有最终采样与连接关闭间的微小窗口。高带宽用户可在轮询窗口内超过额度。这不是精确到字节的实时硬限额系统。用户用量日历、套餐重置与到期点使用 UTC，到期日期表示该日 00:00；**机器月额度单独使用 UTC+8**。
 
-Snell v5 的 QUIC Proxy Mode 不支持；v5 TCP 客户端在 sing-box JSON 中以 `version: 4` 导出，这是上游规定的线协议兼容方式。Snell v6 使用 `version: 6`。独立端口模式使用入站计数映射到用户，共享端口模式直接使用用户计数，两种口径不会重复相加。原生客户端 v5/v6 导出保持实际协议版本。Surge 输出仅包括独立端口 Snell；Shadowrocket 另外输出 VLESS Reality URI，尚需实际客户端验证。Reality 使用 VLESS Vision，需填写有效握手域名。
+Snell v5 的 QUIC Proxy Mode 不支持；v5 TCP 客户端在 sing-box JSON 中以 `version: 4` 导出，这是上游规定的线协议兼容方式。Snell v6 使用 `version: 6`。独立端口模式使用入站计数映射到用户，共享端口模式直接使用用户计数，两种口径不会重复相加。原生客户端 v5/v6 导出保持实际协议版本。各客户端仅导出其支持的协议组合；SS、SS2022 和 Trojan 的模式、密钥、传输与兼容范围见 [协议配置](docs/protocols.md)。Reality 使用 VLESS Vision，需填写有效握手域名。
 
 ## 验证
 
@@ -119,6 +119,8 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 
 - **Snell v6**：`default`（加密 + PSK 派生流量整形）、`unshaped`（加密、不整形）、`unsafe-raw`（无加密，需显式风险确认）。支持共享节点 PSK、客户端连接复用和网络类型。v6 的具体流量特征由核心根据 PSK 派生，不存在任意手工特征模板字段。
 - **Snell v5**：HTTP 混淆及客户端 Host；v6 不使用 v5 的混淆选项。
+- **SS / SS2022**：独立端口或 AES 系列共享端口、加密方式、自动密钥、TCP/UDP 网络限制；用户流量与其他节点共享额度。
+- **Trojan**：证书、SNI、TLS 最低版本、ALPN，以及 TCP / WebSocket / gRPC 传输选项。
 - **通用监听**：IPv4/IPv6 监听地址、TCP Fast Open、Multipath TCP、Keep Alive 开关与时间。功能仍取决于系统与对端支持。已有授权的独立端口节点不能直接改变端口起点或认证模式，以免悄悄更换用户端口。
 - **Reality**：SNI 与握手域名/IP 分开配置，支持握手端口与超时、允许时间差、多个 Short ID、X25519 私钥导入/自动公钥推导/密钥重生成、客户端 uTLS 指纹、Flow、ALPN。服务端只接受该入站的一个 SNI；订阅选择 Short ID 列表的第一项。服务端与导出客户端保持一致。
 - **候选 SNI**：`www.cloudflare.com`、`www.microsoft.com`、`www.apple.com`。使用前应从节点所在网络验证 TLS 1.3 与 h2 支持，候选域名不保证持续或各地区可用。编辑页可执行证书校验和 TLS 握手检测，检测不保存节点。
@@ -131,7 +133,7 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 
 ### 订阅分享页
 
-用户专属 `/s/{token}` 页面登录后提供多节点配置、共享额度与到期倒计时、上传/下载与每日记录、配置复制、节点 URI 二维码、分享页/订阅地址二维码，以及 Snell 密码自助修改。修改密码需要页面 CSRF，20 秒内限一次，更新该用户全部 Snell 节点的 PSK/userkey，不更改 Reality UUID。停用或到期用户不展示连接凭据；撤销分享链接也使旧二维码入口失效。
+用户专属 `/s/{token}` 页面登录后提供多节点配置、共享额度与到期倒计时、上传/下载与每日记录、配置复制、节点 URI 二维码、分享页/订阅地址二维码，以及个人协议密码自助修改。修改密码需要页面 CSRF，20 秒内限一次，更新该用户的密码类节点凭据及 SS2022 派生密钥，不更改 Reality UUID。停用或到期用户不展示连接凭据；撤销分享链接也使旧二维码入口失效。
 
 管理端“品牌与分享设置”可设置品牌、联系说明、浅色玻璃/深色主题及公开 URL。公开 URL 仅用于生成链接，不会自动配置 DNS、反向代理或公开监听；通过 SSH 本地端口转发访问时，默认分享 URL 仅在相同转发环境可用。二维码在服务端本地生成，不传给第三方。
 

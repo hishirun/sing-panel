@@ -48,3 +48,20 @@ managed-profile updates, the copy button and the QR code all use that exact URL.
 The receiving client's HTTP User-Agent selects the profile. Explicit format
 endpoints remain available for older subscriptions and nonstandard downloaders.
 The operating system must have the selected client installed/registered.
+
+## Shadowsocks / SS2022 / Trojan
+
+SS and SS2022 are exported to sing-box, Mihomo and SIP002 URI lists. Surge and
+Surfboard include traditional AEAD and AES-based SS2022 methods; 2022 ChaCha20
+is omitted from their INI output. Shared AES-SS2022 credentials use
+`serverKey:userKey`; dedicated-port nodes use only the personal key.
+
+Trojan TCP and WebSocket are exported to all five panel formats. gRPC is
+exported to sing-box, Mihomo and native URI lists, and omitted from INI formats.
+WebSocket path/Host, gRPC service name, TLS SNI and verification settings remain
+consistent across formats. Client output never includes the server private key
+or another user's credential. See [protocol configuration](protocols.md).
+
+The SS/Trojan matrix is verified with real sing-box TCP and UDP traffic for two
+users, including exact payload byte totals and quota removal. INI and URI output
+is validated against documented syntax, not every installed client version.

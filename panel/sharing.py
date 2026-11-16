@@ -72,7 +72,7 @@ def share_context(path,user,host,base):
         uri='';surge='';config=''
         if out:
             uri=base64.b64decode(native_subscription([out],'shadowrocket.txt')).decode().strip()
-            if out['type']=='snell' and 'userkey' not in out:
+            if out['type'] in ('shadowsocks','trojan') or out['type']=='snell' and 'userkey' not in out:
                 surge=native_subscription([out],'surge.conf').removeprefix('[Proxy]\n').strip()
             config=json.dumps(out,indent=2,ensure_ascii=False)
         nodes.append({**n,'port':allowed[n['id']]['port'] if n['mode']=='compat' else n['port'],

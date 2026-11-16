@@ -140,6 +140,10 @@ def test_subscription_formats_credentials_and_transport(tmp_path,certificate,pro
     proxy=yaml.safe_load(body)['proxies'][0]
     assert proxy['password']==out['password']
     if tr!='tcp':assert proxy['network']==tr
+    from panel.sharing import share_context
+    context=share_context(path,users[0],'example.com','https://example.com')
+    supported=not (tr=='grpc' or method.endswith('chacha20-poly1305') and method.startswith('2022-'))
+    assert bool(context['nodes'][0]['surge'])==supported
     for fmt in ('surge.conf','surfboard.conf'):
         body,count=ini_profile(outs,fmt,'https://example.com/s/test',users[0])
         assert count==(0 if tr=='grpc' or method.endswith('chacha20-poly1305') and method.startswith('2022-') else 1)
