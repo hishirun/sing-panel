@@ -37,7 +37,7 @@ def install(app,m):
         if str(raw.get('secret','')).strip():
             secret=str(raw['secret']).strip()
             import re
-            if not re.fullmatch(r'[A-Za-z0-9._~-]{12,255}',secret):raise ValueError('Snell 密码格式无效')
+            if not re.fullmatch(r'[A-Za-z0-9._~-]{12,255}',secret):raise ValueError('节点密码格式无效')
             credentials['secret']=secret
         if str(raw.get('uuid','')).strip():credentials['uuid']=str(uuid.UUID(str(raw['uuid']).strip()))
         return dict(**credentials,name=m.valid_name(str(raw.get('name',''))),quota=quota,expires=expires,group_name=group,comment=comment,

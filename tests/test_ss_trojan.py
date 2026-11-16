@@ -83,6 +83,9 @@ def test_real_tcp_udp_exact_accounting_and_user_isolation(tmp_path,certificate,p
             assert [tuple(r) for r in db.execute('SELECT upload,download FROM node_daily ORDER BY user_id')]==[(34816,69632),(34816,69632)]
             db.execute("UPDATE users SET quota=1 WHERE id='alice'")
         assert outbounds(records(path,'users')[0],records(path,'nodes'),records(path,'memberships'),'127.0.0.1')==[]
+        from panel.core import current_config
+        compiled=json.dumps(current_config(path))
+        assert 'node:alice' not in compiled and 'node:bob' in compiled
     finally:
         if process:process.terminate();process.wait(timeout=5)
         rt.stop()
@@ -124,6 +127,15 @@ def test_subscription_formats_credentials_and_transport(tmp_path,certificate,pro
         assert len(base64.b64decode(user_key(nodes[0],users[0])))==(16 if 'aes-128' in method else 32)
     text=base64.b64decode(native_subscription(outs,'shadowrocket.txt')).decode()
     assert text.startswith('trojan://' if proto=='trojan' else 'ss://')
+    from urllib.parse import urlsplit,unquote,parse_qs
+    link=urlsplit(text.strip())
+    if proto=='trojan':
+        assert unquote(link.username)==out['password'] and parse_qs(link.query)['type']==[tr]
+    elif proto=='ss2022':
+        assert link.username==method and unquote(link.password)==out['password']
+    else:
+        raw=link.netloc.split('@',1)[0]
+        assert base64.urlsafe_b64decode(raw+'='*(-len(raw)%4)).decode()==method+':'+out['password']
     body,count=mihomo_profile(outs,'https://example.com/s/test');assert count==1
     proxy=yaml.safe_load(body)['proxies'][0]
     assert proxy['password']==out['password']
