@@ -73,6 +73,7 @@ def ini_proxy(out, surfboard=False):
         transport=out.get('transport',{})
         if transport.get('type')=='grpc':return None
         line=prefix+', password='+ini_value(out['password'])+', sni='+ini_value(out['tls']['server_name'])+', skip-cert-verify=false'
+        if out['tls'].get('alpn') and not surfboard:line+=', alpn='+ini_value(','.join(out['tls']['alpn']))
         if transport.get('type')=='ws':
             line+=', ws=true, ws-path='+ini_value(transport['path'])
             if transport.get('headers',{}).get('Host'):line+=', ws-headers='+ini_value('Host:'+transport['headers']['Host'])

@@ -310,6 +310,8 @@ def save_node_sync(request,raw,identity=None):
             for args in [('-checkend','0'),('-checkhost',sni)]:
                 result=subprocess.run(['openssl','x509','-in',settings.certificate_path,'-noout',*args],capture_output=True,text=True,timeout=10)
                 if result.returncode:raise ValueError('证书已过期或未覆盖该 SNI 域名')
+            if protocol=='trojan' and settings.trojan_transport in ('ws','grpc') and settings.tls_alpn not in ('','http/1.1' if settings.trojan_transport=='ws' else 'h2'):
+                raise ValueError('WebSocket ALPN 请留空或填 http/1.1；gRPC 请留空或填 h2')
             if protocol=='hysteria2' and settings.tls_min_version!='1.3':raise ValueError('Hysteria2 使用 TLS 1.3')
             if protocol=='hysteria2' and settings.tls_alpn and settings.tls_alpn!='h3':raise ValueError('Hysteria2 ALPN 请留空或填写 h3')
         if raw.get('intent')=='probe':
