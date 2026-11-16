@@ -22,9 +22,19 @@ def outbounds(user,nodes,memberships,host):
                 out['psk']=user['secret']
                 out['server_port']=allowed[n['id']]['port']
                 del out['userkey']
-        elif n['protocol'] in ('anytls','hysteria2'):
+        elif n['protocol'] in ('ss','ss2022'):
+            from .protocols import user_key
+            password=user_key(n,user) if n['protocol']=='ss2022' else user['secret']
+            if n.get('mode')=='compat':out['server_port']=allowed[n['id']]['port']
+            else:password=n['secret']+':'+password
+            out.update(type='shadowsocks',method=o['ss_method'],password=password)
+            if o['network']!='both':out['network']=o['network']
+        elif n['protocol'] in ('anytls','hysteria2','trojan'):
             out.update(type=n['protocol'],password=user['secret'],tls=certificate_tls(n,client=True))
             if n['protocol']=='hysteria2':out.update(hysteria_options(n,client=True))
+            elif n['protocol']=='trojan':
+                from .protocols import transport
+                if transport(n):out['transport']=transport(n)
             else:out.update(idle_session_check_interval=f"{o['any_idle_check']}s",idle_session_timeout=f"{o['any_idle_timeout']}s",min_idle_session=o['any_min_idle'])
         else:
             out.update(type='vless',uuid=user['uuid'],flow=o['flow'],tls=reality_tls(n,client=True))
@@ -37,6 +47,25 @@ def native_subscription(outs,format):
     from urllib.parse import quote
     lines=[]
     for o in outs:
+        if o['type'] in ('shadowsocks','trojan'):
+            if format=='surge.conf':
+                from .client_profiles import ini_proxy
+                line=ini_proxy(o)
+                if line:lines.append(line)
+                continue
+            from urllib.parse import urlencode
+            host=o['server'];host='['+host+']' if ':' in host else host
+            if o['type']=='shadowsocks':
+                credential=(o['method']+':'+quote(o['password'],safe='')) if o['method'].startswith('2022-') else base64.urlsafe_b64encode((o['method']+':'+o['password']).encode()).decode().rstrip('=')
+                lines.append(f"ss://{credential}@{host}:{o['server_port']}#{quote(o['tag'],safe='')}")
+            else:
+                params={'security':'tls','sni':o['tls']['server_name'],'type':'tcp'}
+                if o['tls'].get('alpn'):params['alpn']=','.join(o['tls']['alpn'])
+                transport=o.get('transport',{})
+                if transport.get('type')=='ws':params.update(type='ws',path=transport['path'],host=transport.get('headers',{}).get('Host',''))
+                elif transport.get('type')=='grpc':params.update(type='grpc',serviceName=transport['service_name'])
+                lines.append(f"trojan://{quote(o['password'],safe='')}@{host}:{o['server_port']}?{urlencode(params)}#{quote(o['tag'],safe='')}")
+            continue
         if o['type'] in ('anytls','hysteria2') and format=='shadowrocket.txt':
             from urllib.parse import urlencode
             host=o['server'];host='['+host+']' if ':' in host else host

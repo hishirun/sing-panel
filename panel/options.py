@@ -19,6 +19,11 @@ def domain(value):
     return value
 
 class NodeOptions(BaseModel):
+    ss_method: Literal['aes-128-gcm','aes-256-gcm','chacha20-ietf-poly1305','2022-blake3-aes-128-gcm','2022-blake3-aes-256-gcm','2022-blake3-chacha20-poly1305'] = 'chacha20-ietf-poly1305'
+    trojan_transport: Literal['tcp','ws','grpc'] = 'tcp'
+    ws_path: str = Field('/',max_length=2048)
+    ws_host: str = ''
+    grpc_service_name: str = Field('GunService',max_length=128)
     listen: str = '::'
     tcp_fast_open: bool = False
     tcp_multi_path: bool = False
@@ -61,6 +66,25 @@ class NodeOptions(BaseModel):
     any_idle_check: int = Field(30,ge=1,le=3600)
     any_idle_timeout: int = Field(30,ge=1,le=3600)
     any_min_idle: int = Field(0,ge=0,le=128)
+
+    @field_validator('ws_path')
+    @classmethod
+    def valid_ws_path(cls,v):
+        if not v.startswith('/') or any(ord(c)<33 for c in v) or '#' in v:raise ValueError('WebSocket 路径须以 / 开头，不能含空白或片段')
+        return v
+
+    @field_validator('ws_host')
+    @classmethod
+    def valid_ws_host(cls,v):
+        if not v.strip():return ''
+        try:return str(ipaddress.ip_address(v.strip()))
+        except ValueError:return domain(v)
+
+    @field_validator('grpc_service_name')
+    @classmethod
+    def valid_grpc_service(cls,v):
+        if not re.fullmatch(r'[A-Za-z0-9._/-]{1,128}',v):raise ValueError('gRPC 服务名仅支持字母、数字及 . _ / -')
+        return v
 
     @field_validator('connect_host')
     @classmethod

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from .options import listen_options, snell_options, reality_tls, options, certificate_tls, hysteria_options
 
-PROTOCOLS = ('snell5', 'snell6', 'reality', 'hysteria2', 'anytls')
+PROTOCOLS = ('snell5', 'snell6', 'reality', 'hysteria2', 'anytls', 'ss', 'ss2022', 'trojan')
 
 class DatabaseConnection(sqlite3.Connection):
     """Commit or roll back, then release the connection at the scope boundary."""
@@ -127,20 +127,33 @@ def config(nodes, users, memberships, stats_port=19090):
         # Empty users on some protocols means unauthenticated/default access.
         if not n['enabled'] or not allowed:
             continue
-        if n.get('mode')=='compat' and n['protocol'] in ('snell5','snell6'):
+        if n.get('mode')=='compat' and n['protocol'] in ('snell5','snell6','ss','ss2022'):
             for u in allowed:
                 tag=n['id']+':'+u['id']
                 compat_tags.append(tag)
-                inbounds.append({'tag':tag,'listen_port':grants[(u['id'],n['id'])]['port'],
-                    'type':'snell','version':int(n['protocol'][-1]),'psk':u['secret'],
-                    **listen_options(n),**snell_options(n)})
+                inbound={'tag':tag,'listen_port':grants[(u['id'],n['id'])]['port'],**listen_options(n)}
+                if n['protocol'] in ('ss','ss2022'):
+                    from .protocols import user_key
+                    o=options(n)
+                    inbound.update(type='shadowsocks',method=o['ss_method'],password=user_key(n,u) if n['protocol']=='ss2022' else u['secret'])
+                    if o['network']!='both':inbound['network']=o['network']
+                else:inbound.update(type='snell',version=int(n['protocol'][-1]),psk=u['secret'],**snell_options(n))
+                inbounds.append(inbound)
             continue
         i = {'tag': n['id'], 'listen_port': n['port'], **listen_options(n)}
-        if n['protocol'] in ('hysteria2','anytls'):
+        if n['protocol']=='ss2022':
+            from .protocols import user_key
+            o=options(n)
+            i.update(type='shadowsocks',method=o['ss_method'],password=n['secret'],users=[{'name':n['id']+':'+u['id'],'password':user_key(n,u)} for u in allowed])
+            if o['network']!='both':i['network']=o['network']
+        elif n['protocol'] in ('hysteria2','anytls','trojan'):
             i.update(type=n['protocol'],users=[{'name':n['id']+':'+u['id'],'password':u['secret']} for u in allowed],tls=certificate_tls(n))
             if n['protocol']=='hysteria2':
                 i={k:v for k,v in i.items() if not k.startswith('tcp_') and k!='disable_tcp_keep_alive'}
                 i.update(hysteria_options(n))
+            elif n['protocol']=='trojan':
+                from .protocols import transport
+                if transport(n):i['transport']=transport(n)
             elif options(n)['any_padding'].strip():i['padding_scheme']=options(n)['any_padding'].strip().splitlines()
         elif n['protocol'] in ('snell5', 'snell6'):
             i.update(type='snell', version=int(n['protocol'][-1]), psk=n['secret'],

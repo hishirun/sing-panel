@@ -30,6 +30,7 @@ from .runtime import Runtime
 from .backups import Manager as BackupManager
 from .subscriptions import outbounds
 from .customer_auth import require_customer as user_authenticated
+from .protocols import SS_CLASSIC, SS_2022, new_key, validate_key
 from .options import NodeOptions, PRESETS, FINGERPRINTS, options, domain, import_key, probe_tls
 from pydantic import ValidationError
 
@@ -243,8 +244,9 @@ def editor(request, node=None, values=None, error='', notice='', status=200):
     # Never echo imported keys or PSKs into responses.
     context.pop('private_key',None)
     context.pop('psk',None)
+    context.pop('ss_server_key',None)
     response=render(request,'node_editor.html',node=node,values=context,error=error,notice=notice,
-                    presets=PRESETS,fingerprints=FINGERPRINTS,servers=server_choices())
+                    presets=PRESETS,fingerprints=FINGERPRINTS,ss_methods=SS_2022 if context['protocol']=='ss2022' else SS_CLASSIC,servers=server_choices())
     response.status_code=status
     return response
 
@@ -256,7 +258,8 @@ def new_node(request: Request, protocol: str='snell6', server_id: str='local'):
     if server_id not in {s['id'] for s in server_choices()}:
         raise HTTPException(422,'请选择可用的服务器')
     values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else '', 'server_id':server_id}
-    if protocol in ('hysteria2','anytls') and (DIRECTORY/'tls/fullchain.pem').exists():
+    if protocol=='ss2022':values.update(ss_method=SS_2022[0],mode='shared')
+    if protocol in ('hysteria2','anytls','trojan') and (DIRECTORY/'tls/fullchain.pem').exists():
         from urllib.parse import urlsplit
         values.update(certificate_path=str(DIRECTORY/'tls/fullchain.pem'),key_path=str(DIRECTORY/'tls/privkey.pem'),server_name=urlsplit(read_settings(DB)['public_url']).hostname or '')
     return editor(request,values=values)
@@ -292,11 +295,15 @@ def save_node_sync(request,raw,identity=None):
             raise ValueError('请选择已启用的服务器')
         protocol=node['protocol'] if node else str(raw.get('protocol','snell6'))
         if protocol not in PROTOCOLS:raise ValueError('协议无效')
-        settings=NodeOptions.model_validate(raw)
-        mode='shared' if protocol in ('reality','hysteria2','anytls') else str(raw.get('mode','compat'))
+        defaults={'ss_method':options(node)['ss_method'] if node else SS_2022[0] if protocol=='ss2022' else SS_CLASSIC[2]}
+        settings=NodeOptions.model_validate({**defaults,**raw})
+        mode='shared' if protocol in ('reality','hysteria2','anytls','trojan') else 'compat' if protocol=='ss' else str(raw.get('mode','shared' if protocol=='ss2022' else 'compat'))
         if mode not in ('shared','compat'):raise ValueError('用户模式无效')
-        sni=domain(str(raw.get('server_name',''))) if protocol in ('reality','hysteria2','anytls') else ''
-        if protocol in ('hysteria2','anytls'):
+        if protocol in ('ss','ss2022'):
+            if settings.ss_method not in (SS_CLASSIC if protocol=='ss' else SS_2022):raise ValueError('加密方式与节点协议不匹配')
+            if protocol=='ss2022' and mode=='shared' and settings.ss_method==SS_2022[2]:raise ValueError('ChaCha20 SS2022 请使用独立端口模式')
+        sni=domain(str(raw.get('server_name',''))) if protocol in ('reality','hysteria2','anytls','trojan') else ''
+        if protocol in ('hysteria2','anytls','trojan'):
             if not settings.certificate_path or not settings.key_path:raise ValueError('请填写证书链与私钥文件路径')
             certificate_check=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             certificate_check.load_cert_chain(settings.certificate_path,settings.key_path)
@@ -319,6 +326,10 @@ def save_node_sync(request,raw,identity=None):
             raise ValueError('unsafe-raw 不加密；请明确勾选风险确认，或使用 default / unshaped')
         candidate=dict(node) if node else {'id':uuid.uuid4().hex,'enabled':1,'private_key':'',
             'public_key':'','short_id':secrets.token_hex(8),'secret':secrets.token_urlsafe(24)}
+        if protocol=='ss2022':
+            supplied=str(raw.get('ss_server_key','')).strip()
+            if supplied:candidate['secret']=validate_key(supplied,settings.ss_method)
+            elif not node or options(node)['ss_method']!=settings.ss_method or raw.get('rotate_ss_key')=='1':candidate['secret']=new_key(settings.ss_method)
         supplied_psk=str(raw.get('psk','')).strip()
         if supplied_psk:
             if not re.fullmatch(r'[A-Za-z0-9._~-]{12,255}',supplied_psk):

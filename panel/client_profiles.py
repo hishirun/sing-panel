@@ -66,6 +66,17 @@ def ini_proxy(out, surfboard=False):
     if ':' in host:
         host = '[' + host + ']'
     prefix = f"{out['tag']} = {kind}, {ini_value(host)}, {out['server_port']}"
+    if kind=='shadowsocks':
+        if out['method']=='2022-blake3-chacha20-poly1305':return None
+        return f"{out['tag']} = ss, {ini_value(host)}, {out['server_port']}, encrypt-method={out['method']}, password={ini_value(out['password'])}, udp-relay=true"
+    if kind=='trojan':
+        transport=out.get('transport',{})
+        if transport.get('type')=='grpc':return None
+        line=prefix+', password='+ini_value(out['password'])+', sni='+ini_value(out['tls']['server_name'])+', skip-cert-verify=false'
+        if transport.get('type')=='ws':
+            line+=', ws=true, ws-path='+ini_value(transport['path'])
+            if transport.get('headers',{}).get('Host'):line+=', ws-headers='+ini_value('Host:'+transport['headers']['Host'])
+        return line+(', udp-relay=true' if surfboard else '')
     if kind == 'snell':
         if 'userkey' in out or (surfboard and out['version'] == 6):
             return None
@@ -111,6 +122,16 @@ def ini_profile(outs, fmt, url, user):
 def mihomo_proxy(out):
     kind = out['type']
     p = {'name': out['tag'], 'type': kind, 'server': out['server'], 'port': out['server_port'], 'udp': True}
+    if kind=='shadowsocks':
+        p.update(type='ss',cipher=out['method'],password=out['password'],udp=out.get('network')!='tcp')
+        return p
+    if kind=='trojan':
+        tls=out['tls'];p.update(password=out['password'],sni=tls['server_name'],**{'skip-cert-verify':False})
+        if tls.get('alpn'):p['alpn']=tls['alpn']
+        transport=out.get('transport',{})
+        if transport.get('type')=='ws':p.update(network='ws',**{'ws-opts':{'path':transport['path'],'headers':transport.get('headers',{})}})
+        elif transport.get('type')=='grpc':p.update(network='grpc',**{'grpc-opts':{'grpc-service-name':transport['service_name']}})
+        return p
     if kind == 'snell':
         if out['version'] == 6 or 'userkey' in out:
             return None
