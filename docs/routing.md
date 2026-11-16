@@ -33,7 +33,7 @@ SOCKS5（含认证）、HTTP/HTTPS、Shadowsocks/SS2022、VMess、VLESS（TLS/Re
 
 真实核心测试覆盖带认证 SOCKS5、SS AEAD、SS2022 上游的路由命中、默认直连、指定默认出口和拦截；包括控制 API 的出口延迟测试。另覆盖 URI 导入、所有协议配置 check、顺序调整、引用保护、CSRF/登录保护、凭据不泄露、保存失败回滚和来源节点消失的处理。
 
-上线前备份 /opt/sing-panel/backups/before-routing-20261103.tar.gz 与 before-routing-20261103.db。上线不预设真实上游或业务规则。
+部署或升级前备份代码、数据库和配置；恢复步骤见 [自动备份与恢复](backups.md)。初始安装不预设上游出口或业务规则。
 
 ## GeoIP / Geosite
 

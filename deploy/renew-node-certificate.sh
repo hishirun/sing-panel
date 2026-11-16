@@ -4,8 +4,8 @@ expected_lineage=${PANEL_CERT_LINEAGE:-}
 if [ -z "$expected_lineage" ] && [ -r /etc/sing-panel/node-certificate-lineage ]; then
     IFS= read -r expected_lineage < /etc/sing-panel/node-certificate-lineage || true
 fi
-# Retain the original deployment default; new installations specify their own
-# lineage in the root-owned file above. It is data, never sourced shell code.
+# Specify the certificate lineage in the root-owned file above or the environment.
+# The fallback is an example only. Configuration is data, never sourced shell code.
 expected_lineage=${expected_lineage:-/etc/letsencrypt/live/panel.example.com}
 [ "${RENEWED_LINEAGE:-}" = "$expected_lineage" ] || exit 0
 install -o singpanel -g singpanel -m 600 "$RENEWED_LINEAGE/fullchain.pem" /opt/sing-panel/data/tls/fullchain.pem.new

@@ -48,7 +48,7 @@ docker compose up -d
 管理端默认仅绑定 `127.0.0.1:18889`。使用 SSH 转发：
 
 ```sh
-ssh -N -L 18889:127.0.0.1:18889 -p 2323 root@YOUR_SERVER
+ssh -N -L 18889:127.0.0.1:18889 -p 22 USER@YOUR_SERVER
 ```
 
 浏览器访问 <http://127.0.0.1:18889>。先创建节点，再创建用户并勾选授权节点，打开用户专属订阅页。
@@ -81,7 +81,7 @@ export PANEL_PUBLIC_HOST=127.0.0.1
 
 远端 Agent 持久化累计采样并通过 WSS 上报；主控按服务器与核心 epoch 隔离基线，提交用量后才确认报告。用户在本机与远端节点之间共享同一额度和有效期。停用、到期或额度用尽后，在线 Agent 在后续同步中移除用户；断联机器受 90 秒租约限制。多台机器并行传输仍可能在采样与同步窗口内超额。
 
-只统计代理承载的应用层字节，不含 TCP/IP、TLS 等协议开销；与旧 snell-ui 的 iptables 口径不同。不得把两种数据混为同一账单。
+只统计代理承载的应用层字节，不含 TCP/IP、TLS 等协议开销；与系统网卡或防火墙计数的口径不同，不应直接混用。
 
 配置变化先执行 `sing-box check`；启动失败会尝试恢复上一份可运行配置。配置变化需要重启整个核心，因此所有活动连接会断开。禁用/超额/到期用户从入站用户列表移除；无有效授权用户的入站不监听，避免空用户列表的隐式访问。生效延迟通常是采样间隔加重启时间。
 
@@ -107,7 +107,7 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 - [V2Ray 用户统计](https://sing-box.sagernet.org/configuration/experimental/v2ray-api/)
 - [StatsService 协议](https://github.com/SagerNet/sing-box/blob/v1.14.3/experimental/v2rayapi/stats.proto)
 
-此项目独立实现；现有 snell-ui 仅用于功能与计费口径分析，未包含生产数据库、凭据或原项目源码。
+本项目独立维护；核心补丁、配置模板与第三方资源的来源和许可见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ## 原生 systemd 部署
 
@@ -121,7 +121,7 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 - **Snell v5**：HTTP 混淆及客户端 Host；v6 不使用 v5 的混淆选项。
 - **通用监听**：IPv4/IPv6 监听地址、TCP Fast Open、Multipath TCP、Keep Alive 开关与时间。功能仍取决于系统与对端支持。已有授权的独立端口节点不能直接改变端口起点或认证模式，以免悄悄更换用户端口。
 - **Reality**：SNI 与握手域名/IP 分开配置，支持握手端口与超时、允许时间差、多个 Short ID、X25519 私钥导入/自动公钥推导/密钥重生成、客户端 uTLS 指纹、Flow、ALPN。服务端只接受该入站的一个 SNI；订阅选择 Short ID 列表的第一项。服务端与导出客户端保持一致。
-- **候选 SNI**：`www.cloudflare.com`、`www.microsoft.com`、`www.apple.com`。2026-10-11 从部署主机确认 TLS 1.3 和 h2 可用；这只是当时的连接测试，不保证后续网络状态或任何地区的可用性。编辑页可重新执行证书校验和 TLS 握手检测，检测不保存节点。
+- **候选 SNI**：`www.cloudflare.com`、`www.microsoft.com`、`www.apple.com`。使用前应从节点所在网络验证 TLS 1.3 与 h2 支持，候选域名不保证持续或各地区可用。编辑页可执行证书校验和 TLS 握手检测，检测不保存节点。
 
 保存前对包含测试用户的完整入站执行 `sing-box check`，即便节点尚无授权用户，也能检查配置。字段和错误提示不会回显导入私钥或 PSK。订阅不会包含服务端私钥；修改密钥、PSK、SNI 等参数后客户端需更新配置。
 
