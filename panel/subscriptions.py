@@ -49,8 +49,8 @@ def native_subscription(outs,format):
     for o in outs:
         if o['type'] in ('shadowsocks','trojan'):
             if format=='surge.conf':
-                from .client_profiles import ini_proxy
-                line=ini_proxy(o)
+                from .client_profiles import ini_proxy,named_outbounds
+                line=ini_proxy(named_outbounds([o])[0])
                 if line:lines.append(line)
                 continue
             from urllib.parse import urlencode

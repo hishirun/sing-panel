@@ -28,6 +28,8 @@ def transport(node):
     from .options import options
     o=options(node)
     if o['trojan_transport']=='ws':
-        return {'type':'ws','path':o['ws_path'],**({'headers':{'Host':o['ws_host']}} if o['ws_host'] else {})}
+        host=o['ws_host']
+        if ':' in host:host='['+host+']'
+        return {'type':'ws','path':o['ws_path'],**({'headers':{'Host':host}} if host else {})}
     if o['trojan_transport']=='grpc':return {'type':'grpc','service_name':o['grpc_service_name']}
     return None
