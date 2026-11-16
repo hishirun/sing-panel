@@ -68,6 +68,14 @@ def next_boundary(now,mode,days=30,day=1,weekday=1):
             if month==13:year+=1;month=1
     return 0
 
+def cycle_start(end,mode,days=30,day=1):
+    if mode in ('days','daily','weekly'):
+        return end-86400*(days if mode=='days' else 7 if mode=='weekly' else 1)
+    current=datetime.fromtimestamp(end,timezone.utc)
+    month=current.month-1;year=current.year
+    if not month:month=12;year-=1
+    return int(current.replace(year=year,month=month,day=min(day,calendar.monthrange(year,month)[1])).timestamp())
+
 def maintain(path,now=None):
     now=int(time.time() if now is None else now)
     with connect(path) as db:
@@ -98,6 +106,9 @@ def maintain(path,now=None):
                     reset=True;changed=True
                     p['next_reset']=(due+((now-due)//(p['reset_days']*DAY)+1)*p['reset_days']*DAY) if mode=='days' else next_boundary(now,mode,p['reset_days'],p['reset_day'],p['reset_weekday'])
                     audit(db,'周期流量重置',u['name'])
+            if reset:
+                cutoff=cycle_start(p['next_reset'],mode,p.get('reset_days',30),p.get('reset_day',1)) if mode!='none' else cycle_start(expires,p['renew_mode'],p.get('renew_days',30),p.get('renew_day',1))
+                db.execute('INSERT INTO user_accounting_windows VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET since=MAX(since,excluded.since)',(u['id'],cutoff))
             if changed:
                 db.execute('UPDATE users SET policy=?,expires=?,upload=CASE WHEN ? THEN 0 ELSE upload END,download=CASE WHEN ? THEN 0 ELSE download END WHERE id=?',
                            (json.dumps(p),expires,reset,reset,u['id']))

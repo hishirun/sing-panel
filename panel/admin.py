@@ -145,7 +145,9 @@ def install(app,m):
                         u=dict(db.execute('SELECT * FROM users WHERE id=?',(identity,)).fetchone())
                         if action in ('enable','disable'):db.execute('UPDATE users SET enabled=? WHERE id=?',(action=='enable',identity))
                         elif action=='delete':db.execute('DELETE FROM users WHERE id=?',(identity,))
-                        elif action=='reset':db.execute('UPDATE users SET upload=0,download=0 WHERE id=?',(identity,))
+                        elif action=='reset':
+                            db.execute('UPDATE users SET upload=0,download=0 WHERE id=?',(identity,))
+                            db.execute('INSERT OR REPLACE INTO user_accounting_windows VALUES(?,?)',(identity,int(time.time())))
                         elif action=='rotate':db.execute('UPDATE users SET token=? WHERE id=?',(secrets.token_urlsafe(32),identity))
                         elif action=='credentials':db.execute('UPDATE users SET secret=?,uuid=? WHERE id=?',(secrets.token_urlsafe(24),str(uuid.uuid4()),identity))
                         elif action=='clear_ips':db.execute('DELETE FROM client_ips WHERE user_id=?',(identity,))

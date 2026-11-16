@@ -132,6 +132,8 @@ def get_server(path, identity, safe=True):
     from .server_traffic import summary
     value['traffic'] = summary(path, identity)
     value['last_command'] = last_command(path, identity)
+    from .server_publish import status
+    value['publication']=status(path,identity)
     return value
 
 
@@ -140,8 +142,9 @@ def list_servers(path, now=None):
         rows = [dict(row) for row in db.execute('SELECT * FROM servers ORDER BY created_at,rowid')]
         counts = _counts(db)
     from .server_traffic import summary
+    from .server_publish import status
     return [{**_safe(row, now, counts.get(row['id'], 0)), 'traffic': summary(path, row['id'], now=now),
-             'last_command': last_command(path, row['id'])} for row in rows]
+             'last_command': last_command(path, row['id']), 'publication':status(path,row['id'])} for row in rows]
 
 
 def last_command(path, identity):
@@ -368,7 +371,7 @@ def sanitize_metrics(raw):
         value = raw.get(key)
         if isinstance(value, str):
             result[key] = ''.join(c for c in value[:200] if ord(c) >= 32)
-    for key in ('cpu', 'uptime', 'rx', 'tx', 'rx_total', 'tx_total', 'cores', 'connection_count', 'online_users', 'sampled_at'):
+    for key in ('cpu', 'uptime', 'rx', 'tx', 'rx_total', 'tx_total', 'cores', 'connection_count', 'online_users', 'sampled_at', 'pending_reports', 'oldest_report_at'):
         value = raw.get(key)
         if value is None:
             result[key] = None
@@ -522,7 +525,15 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
                 or not isinstance(item.get('ok'), bool) or not isinstance(item.get('error', ''), str)):
             raise ValueError('操作结果格式无效')
         results[item['id']] = {'ok': item['ok'], 'error': item.get('error', '')[:2000]}
-    fingerprint = _hash(json.dumps({'epoch': epoch, 'counters': counters}, sort_keys=True, separators=(',', ':')))
+    if type(report.get('accounting_version',1)) is not int or report.get('accounting_version',1) not in (1,2):
+        raise ValueError('不支持的流量计费版本')
+    timed=report.get('accounting_version')==2
+    observed=report.get('observed_at');sequence=report.get('sequence')
+    if timed and (type(observed) is not int or not 0<observed<=now+300 or type(sequence) is not int or not 0<sequence<2**63):
+        raise ValueError('离线流量时间或序号无效')
+    evidence={'epoch':epoch,'counters':counters}
+    if timed:evidence.update(observed_at=observed,sequence=sequence)
+    fingerprint = _hash(json.dumps(evidence, sort_keys=True, separators=(',', ':')))
     with locked(path, identity):
         try:
             row = _raw(path, identity)
@@ -543,7 +554,25 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
         if previous and previous[0] != fingerprint:
             raise ValueError('重复报告的计数内容不一致')
         if not previous:
-            account_fn(path, 'agent:' + identity + ':' + epoch, counters, server_id=identity, ignore_stale=True)
+            from .management import maintain
+            maintain(path,now=now)
+            if timed:
+                with connect(path) as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    checkpoint=db.execute('SELECT * FROM server_report_sequences WHERE server_id=? AND epoch=?',(identity,epoch)).fetchone()
+                    last=checkpoint['sequence'] if checkpoint else 0
+                    if sequence>last:
+                        if sequence!=last+1 or checkpoint and observed<checkpoint['observed_at']:
+                            raise ValueError('离线流量批次顺序无效')
+                        account_fn(path,'agent:'+identity+':'+epoch,counters,server_id=identity,ignore_stale=True,observed_at=observed,_connection=db)
+                        db.execute('INSERT OR REPLACE INTO server_report_sequences VALUES(?,?,?,?,?)',(identity,epoch,sequence,observed,fingerprint))
+                    elif sequence==last and checkpoint['fingerprint']!=fingerprint:
+                        raise ValueError('重复批次的计数内容不一致')
+                    db.execute('INSERT INTO server_reports(server_id,report_id,fingerprint,created_at) VALUES(?,?,?,?)',(identity,report_id,fingerprint,now))
+                    db.execute('DELETE FROM server_reports WHERE server_id=? AND rowid NOT IN (SELECT rowid FROM server_reports WHERE server_id=? ORDER BY rowid DESC LIMIT 10000)',(identity,identity))
+                previous=(fingerprint,)
+            else:
+                account_fn(path, 'agent:' + identity + ':' + epoch, counters, server_id=identity, ignore_stale=True)
         with connect(path) as db:
             if not previous:
                 db.execute('INSERT INTO server_reports(server_id,report_id,fingerprint,created_at) VALUES(?,?,?,?)',
@@ -586,14 +615,16 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
                 pairs = _authorized_pairs(db, identity, now)
             policy = {'max_ips': {uid: limit for (nid, uid), limit in pairs.items()
                                   if any(f'{kind}>>>{nid}:{uid}>>>traffic>>>uplink' in issued_grants for kind in ('user', 'inbound'))}}
-        except Exception:
+        except Exception as error:
+            from .server_publish import Pending
+            pending=isinstance(error,Pending)
             # A bad central configuration must not stop acknowledgments of
             # traffic already committed, or renew a stale authorization lease.
             with connect(path) as db:
-                db.execute("UPDATE servers SET error='主控配置生成失败，请检查节点或证书设置' WHERE id=?", (identity,))
-            return {'type': 'desired', 'protocol': PROTOCOL, 'ack_report_id': report_id,
+                db.execute('UPDATE servers SET error=? WHERE id=?',('正在准备此机器配置' if pending else '主控配置生成失败，请检查节点或证书设置',identity))
+            return {'type': 'desired', 'protocol': PROTOCOL, 'accounting_version':2, 'ack_report_id': report_id,
                     'revision': row['desired_revision'], 'state': 'stopped',
-                    'lease_seconds': 0, 'commands': [], 'error': '主控配置生成失败'}
+                    'lease_seconds': 0, 'commands': [], 'error': '配置准备中' if pending else '主控配置生成失败'}
         with connect(path) as db:
             commands = [dict(r) for r in db.execute('SELECT id,action,user_id,source_ip FROM server_commands WHERE server_id=? ORDER BY created_at,rowid', (identity,))]
         for command in commands:
@@ -601,7 +632,7 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
                 command.pop('user_id')
             if not command['source_ip']:
                 command.pop('source_ip')
-        desired = {'type': 'desired', 'protocol': PROTOCOL, 'ack_report_id': report_id,
+        desired = {'type': 'desired', 'protocol': PROTOCOL, 'accounting_version':2, 'ack_report_id': report_id,
                    'revision': revision, 'state': 'stopped' if traffic.get('blocked') else row['desired_state'], 'lease_seconds': LEASE_SECONDS,
                    'commands': commands, 'policy': policy}
         if traffic.get('blocked'):

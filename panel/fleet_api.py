@@ -287,11 +287,10 @@ def install(app, m):
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             raise HTTPException(422, str(error)) from None
 
-    def reconcile(identity, report, credential_generation, connection_generation):
-        from .fleet_config import configuration
-        with m.runtime.lock:
-            return fleet.process_report(m.DB, identity, report, configuration, account, stats_port=19190,
-                                        credential_generation=credential_generation, connection_generation=connection_generation)
+    from .server_publish import Coordinator
+    m.server_publisher=Coordinator(m)
+    def reconcile(identity,report,credential_generation,connection_generation):
+        return m.server_publisher.reconcile(identity,report,credential_generation,connection_generation)
 
     @app.websocket('/agent/v1/ws')
     async def agent_socket(websocket: WebSocket):

@@ -1,5 +1,6 @@
 """Node configuration and durable per-user accounting."""
 import json
+from contextlib import nullcontext
 import sqlite3
 import secrets
 import socket
@@ -75,6 +76,8 @@ def init_db(path):
         db.execute('CREATE INDEX IF NOT EXISTS daily_user_day ON daily(user_id,day)')
         db.execute('CREATE INDEX IF NOT EXISTS node_daily_user_day ON node_daily(user_id,day,node_id)')
         db.execute('CREATE INDEX IF NOT EXISTS node_hourly_user_hour ON node_hourly(user_id,hour,node_id)')
+        from .server_publish import migrate as migrate_publish
+        migrate_publish(db)
         from .diagnostics import migrate as migrate_diagnostics
         migrate_diagnostics(db)
         from .management import migrate
@@ -167,13 +170,13 @@ def current_config(path, stats_port=19090, server_id='local'):
     document=compose(config(*rows,stats_port),path)
     return set_rule_paths(document,Path(path).parent)
 
-def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=False, observed_at=None):
+def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=False, observed_at=None, _connection=None):
     """Atomic and idempotent; never reset the remote counter."""
     stamp=time.time() if observed_at is None else min(time.time(),float(observed_at))
     hour=time.strftime('%Y-%m-%dT%H:00',time.gmtime(stamp))
     day = day or time.strftime('%Y-%m-%d', time.gmtime(stamp))
-    with connect(path) as db:
-        db.execute('BEGIN IMMEDIATE')
+    with (connect(path) if _connection is None else nullcontext(_connection)) as db:
+        if _connection is None:db.execute('BEGIN IMMEDIATE')
         for counter, value in counters.items():
             parts = counter.split('>>>')
             if len(parts)!=4 or parts[0] not in ('user','inbound') or parts[2]!='traffic':
@@ -200,16 +203,22 @@ def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=Fal
             if previous and not delta:
                 continue
             if delta>0:
-                db.execute('UPDATE users SET last_seen=? WHERE id=?',(int(time.time()),user))
+                db.execute('UPDATE users SET last_seen=MAX(last_seen,?) WHERE id=?',(int(stamp),user))
                 row=db.execute('SELECT policy,activated_at FROM users WHERE id=?',(user,)).fetchone()
                 policy=json.loads(row['policy'])
                 if policy.get('first_use_days') and not row['activated_at']:
-                    activated=int(time.time())
+                    activated=int(stamp)
                     db.execute('UPDATE users SET activated_at=?,expires=? WHERE id=?',(activated,activated+policy['first_use_days']*86400,user))
                 elif not row['activated_at']:
-                    db.execute('UPDATE users SET activated_at=? WHERE id=?',(int(time.time()),user))
+                    db.execute('UPDATE users SET activated_at=? WHERE id=?',(int(stamp),user))
             col = 'upload' if parts[3]=='uplink' else 'download'
-            db.execute(f'UPDATE users SET {col}={col}+? WHERE id=?',(delta,user))
+            window=db.execute('SELECT since FROM user_accounting_windows WHERE user_id=?',(user,)).fetchone()
+            cutoff=window['since'] if window else 0
+            if delta>0 and not window and policy.get('reset_mode','none')!='none' and policy.get('next_reset'):
+                from .management import cycle_start
+                cutoff=cycle_start(policy['next_reset'],policy['reset_mode'],policy.get('reset_days',30),policy.get('reset_day',1))
+            if stamp>=cutoff:
+                db.execute(f'UPDATE users SET {col}={col}+? WHERE id=?',(delta,user))
             db.execute(f'''INSERT INTO daily(day,user_id,{col}) VALUES(?,?,?)
                 ON CONFLICT(day,user_id) DO UPDATE SET {col}={col}+excluded.{col}''',(day,user,delta))
             if delta:

@@ -5,6 +5,7 @@ small journal restores the previous applied documents after an interrupted
 publication; browser requests never spawn a separate sing-box process.
 """
 import json
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import threading
 import time
@@ -39,12 +40,12 @@ class Publisher:
                 result[server] = user_routing.compose(config(nodes, records(self.m.DB, 'users'), members, self.m.STATS_PORT),
                                                      self.m.DB, policy_overrides=overrides)
             else:
-                from .fleet_config import configuration
-                # Removed machines have no remaining core to acknowledge.
+                # Desired policies are committed once. Each remote machine
+                # compiles and validates independently when it reconnects.
+                from .server_publish import input_signature
                 with connect(self.m.DB) as db:
-                    if not db.execute('SELECT 1 FROM servers WHERE id=?', (server,)).fetchone():
-                        continue
-                result[server] = configuration(self.m.DB, server, 19190, policy_overrides=overrides)
+                    if not db.execute('SELECT 1 FROM servers WHERE id=?',(server,)).fetchone():continue
+                result[server]={'_remote':server,'_inputs':input_signature(self.m.DB,server),'_overrides':overrides}
         return result
 
     def targets(self, candidates):
@@ -54,6 +55,7 @@ class Publisher:
 
     def validate_documents(self, documents):
         for document in documents.values():
+            if document.get('_remote'):continue
             routing.set_rule_paths(document, self.m.DIRECTORY)
             try:
                 self.m.check_document(document)
@@ -162,6 +164,20 @@ class Publisher:
                 self.fail([row['user_id']], str(error))
         if not candidates:
             return
+        # Disjoint machines publish independently; shared machines coalesce.
+        groups=[]
+        for uid,document in candidates.items():
+            servers=self.targets({uid:document})[uid]
+            overlap=[g for g in groups if g[0]&servers]
+            combined={uid:document};selected=set(servers)
+            for old_servers,old_candidates in overlap:
+                groups.remove((old_servers,old_candidates));selected.update(old_servers);combined.update(old_candidates)
+            groups.append((selected,combined))
+        with ThreadPoolExecutor(max_workers=min(4,len(groups))) as pool:
+            list(pool.map(self._publish,[group[1] for group in groups]))
+
+    def _publish(self,candidates):
+        m=self.m
         previous = []
         promoted = False
         try:
@@ -170,6 +186,7 @@ class Publisher:
             targets = self.targets(candidates)
             documents = self.documents(set().union(*targets.values()), candidates)
             for document in documents.values():
+                if document.get('_remote'):continue
                 routing.prepare_rule_sets(document, m.DIRECTORY, m.BINARY, 30)
             self.validate_documents(documents)
             validated = self.signatures(documents)
@@ -189,6 +206,8 @@ class Publisher:
                     raise ValueError('节点或分流配置已变化，请刷新后重新应用')
                 with connect(m.DB) as db:
                     db.execute('BEGIN IMMEDIATE')
+                    if db.execute('SELECT 1 FROM routing_publish_journal').fetchone():
+                        raise ValueError('上次应用仍在恢复，请稍后重试')
                     for uid, document in candidates.items():
                         row = dict(db.execute('SELECT * FROM user_routing WHERE user_id=?', (uid,)).fetchone())
                         if row['status'] != 'applying':

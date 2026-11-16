@@ -117,6 +117,8 @@ class Agent:
             raise PermissionError('Controller authorization revoked')
         if desired.get('ack_report_id') != report['report_id']:
             raise ValueError('Controller acknowledgement does not match the report')
+        if report.get('accounting_version')==2 and desired.get('accounting_version')!=2:
+            raise ValueError('Controller must support timestamped accounting before acknowledging this batch')
         self.core.spool.acknowledge(report['report_id'])
         # Confirm the release currently running, before a new update command
         # can create the next release's recovery marker.

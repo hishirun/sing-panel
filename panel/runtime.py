@@ -156,9 +156,10 @@ class Runtime:
     def tick(self):
         with self.lock:
             core_error=None
-            try:self.sample()
+            try:
+                maintain(self.db)
+                self.sample()
             except Exception as error:core_error=error
-            maintain(self.db)
             from .machine import snapshot
             from .server_traffic import record
             record(self.db,'local',snapshot(self.directory))

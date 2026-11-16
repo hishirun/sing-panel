@@ -103,6 +103,12 @@ window.panelPageScripts.register(document.currentScript.src, () => {
    setMeter(card,'cpu',metrics.cpu);setMeter(card,'memory',metrics.memory?.percent);setMeter(card,'disk',metrics.disk?.percent);
    text(card,'rx',rate(row.online?metrics.rx:null));text(card,'tx',rate(row.online?metrics.tx:null));text(card,'rx_total',bytes(metrics.rx_total));text(card,'tx_total',bytes(metrics.tx_total));
    text(card,'nodes_count',String(number(row.nodes_count)));text(card,'sync',syncLabel(row));const sync=card.querySelector('[data-fleet-field="sync"]');sync?.classList.toggle('fleet-warning',Boolean(row.error)||Boolean(row.traffic?.blocked));
+   const publication=row.publication||{},pubState=row.is_local?'applied':publication.status||'waiting';
+   text(card,'publication',row.is_local?'本机管理':({waiting:'等待接入',queued:'等待合并发布',preparing:'正在校验',ready:'等待机器确认',applied:'已生效',failed:'校验失败'})[pubState]||'等待发布');
+   text(card,'publication_detail',publication.message||'');card.dataset.publication=pubState;
+   const pending=metrics.pending_reports,oldest=metrics.oldest_report_at,delayed=numeric(oldest)&&oldest>0&&Date.now()/1000-oldest>15;
+   text(card,'backfill',row.is_local?'本机实时记账':numeric(pending)?pending>0&&delayed?(row.online?'补报中 · ':'上次待补报 · ')+pending+' 批':'流量同步正常':'升级 Agent 后启用按时补报');
+   text(card,'backfill_detail',!row.is_local&&pending>0&&delayed?'最早采样 '+moment(oldest):'');
    const error=card.querySelector('[data-fleet-field="error"]');if(error){error.textContent=row.error||'';error.hidden=!row.error;}
    const traffic=row.traffic||{},used=number(traffic.used),quota=number(traffic.quota),quotaPercent=quota?100*used/quota:null;
    text(card,'monthly_usage',bytes(used)+' / '+(quota?bytes(quota):'不限量'));text(card,'monthly_percent',quota?percentage(quotaPercent):'不限量');setMeter(card,'monthly',quotaPercent);

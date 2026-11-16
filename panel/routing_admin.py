@@ -69,6 +69,10 @@ def install(app,m):
         nodes,users,members=(records(m.DB,table) for table in ('nodes','users','memberships'))
         result={}
         for server in sorted({'local'}|{node.get('server_id','local') for node in nodes}):
+            if server!='local':
+                from .server_publish import input_signature
+                result[server]={'_remote':server,'_inputs':input_signature(m.DB,server),'_settings':settings}
+                continue
             owned=[node for node in nodes if node.get('server_id','local')==server]
             identities={node['id'] for node in owned}
             document=compose(config(owned,users,[row for row in members if row['node_id'] in identities],
@@ -90,6 +94,7 @@ def install(app,m):
             prepared=documents(new)
             validated=signature(prepared)
         for document in prepared.values():
+            if document.get('_remote'):continue
             r.prepare_rule_sets(document,m.DIRECTORY,m.BINARY)
             m.check_document(document)
         with m.runtime.lock:

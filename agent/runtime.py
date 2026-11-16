@@ -414,6 +414,7 @@ class Core:
             queued = self.spool.oldest()
             report = queued or {'report_id': uuid.uuid4().hex, 'epoch': self.epoch, 'counters': {}}
             machine = snapshot(self.directory)
+            machine.update(**self.spool.summary())
             machine.update(agent_version=__version__, core_version=self.version, running=self.running(),
                            connection_count=0, online_users=0)
             connections, truncated = [], False

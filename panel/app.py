@@ -429,6 +429,7 @@ def action(request: Request, kind: str, identity: str, token: str = Form(...), a
                 db.execute(f'DELETE FROM {kind} WHERE id=?',(identity,))
             elif kind=='users' and action=='reset':
                 db.execute('UPDATE users SET upload=0,download=0 WHERE id=?',(identity,))
+                db.execute('INSERT OR REPLACE INTO user_accounting_windows VALUES(?,?)',(identity,int(time.time())))
             elif kind=='users' and action=='rotate':
                 db.execute('UPDATE users SET token=? WHERE id=?',(secrets.token_urlsafe(32),identity))
             elif kind=='users' and action=='limits':

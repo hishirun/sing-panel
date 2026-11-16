@@ -41,7 +41,7 @@ def test_agent_spool_queries_close_their_connection(tmp_path):
     spool = Spool(tmp_path)
     report_id = spool.store('epoch', {'traffic': 12})
     with spool.connect() as db:
-        assert db.execute('SELECT report_id FROM reports').fetchone()[0] == report_id
+        assert db.execute('SELECT report_id FROM timed_reports').fetchone()[0] == report_id
     with pytest.raises(sqlite3.ProgrammingError, match='closed'):
         db.execute('SELECT 1')
     assert spool.oldest()['counters'] == {'traffic': 12}

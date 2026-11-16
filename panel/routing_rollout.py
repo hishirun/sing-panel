@@ -194,6 +194,11 @@ def public_status(path, uid):
                         status, message = 'paused', '服务器流量额度已用尽，恢复后继续同步'
                     else:
                         message = '等待远端核心确认'
+            if status not in ('applied','paused','offline') and sid!='local':
+                from .server_publish import status as publication_status
+                publication=publication_status(path,sid)
+                if publication['status']=='failed':status,message='failed','此机器配置校验失败，其他机器继续独立发布，请联系管理员'
+                elif publication['status'] in ('preparing','queued'):message='此机器正在独立准备配置'
             targets.append({'server_id': sid if sid in authorized else '',
                             'name': name if sid in authorized else '原节点配置清理', 'status': status, 'message': message})
         confirmed = sum(item['status'] == 'applied' for item in targets)

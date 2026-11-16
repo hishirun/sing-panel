@@ -453,7 +453,7 @@ def test_new_update_marker_survives_current_exchange(tmp_path, monkeypatch):
             self.report = json.loads(value)
 
         def recv(self, timeout):
-            return json.dumps({'type': 'desired', 'protocol': 1, 'ack_report_id': self.report['report_id']})
+            return json.dumps({'type': 'desired', 'protocol': 1, 'accounting_version':2, 'ack_report_id': self.report['report_id']})
 
     instance.exchange(Updating())
     assert read_json(marker) == {'attempted': False}
@@ -504,7 +504,7 @@ def test_actual_websocket_exchange_authenticates_and_acknowledges(tmp_path):
         seen.append(socket.request.headers['Authorization'])
         report = json.loads(socket.recv())
         seen.append(report['counters'])
-        socket.send(json.dumps({'type': 'desired', 'protocol': 1, 'ack_report_id': report['report_id'],
+        socket.send(json.dumps({'type': 'desired', 'protocol': 1, 'accounting_version':2, 'ack_report_id': report['report_id'],
                                'state': 'stopped', 'lease_seconds': 0, 'revision': 'none', 'commands': []}))
 
     with serve(handle, '127.0.0.1', 0) as server:

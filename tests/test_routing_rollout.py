@@ -39,8 +39,9 @@ def test_remote_publication_waits_for_real_running_ack_and_checks_own_nodes(publ
     policy = publish(publisher)
     assert policy['status'] == 'syncing'
     publisher.m.runtime.apply.assert_not_called()
-    validated = publisher.m.check_document.call_args.args[0]
-    assert [node['tag'] for node in validated['inbounds']] == ['shared']
+    # Remote validation is deferred to that server's independent coordinator.
+    publisher.m.check_document.assert_not_called()
+    assert [node['tag'] for node in configuration(publisher.m.DB,sid)['inbounds']]==['shared']
     before = rollout.public_status(publisher.m.DB, 'alice')
     assert before['confirmed'] == 0 and before['targets'][0]['status'] == 'offline'
     desired = exchange(publisher, sid, metrics={'running': True})
