@@ -178,6 +178,17 @@ def install(app, m):
         rows, summary = rows_and_summary()
         return {'servers': rows, 'summary': summary}
 
+    @app.get('/servers/live')
+    async def live_status(request: Request):
+        from starlette.concurrency import run_in_threadpool
+        from .diagnostics import stream
+        await run_in_threadpool(m.authenticated,request)
+        def produce():
+            m.authenticated(request)
+            rows,summary=rows_and_summary()
+            return {'servers':rows,'summary':summary}
+        return stream(request,produce,m)
+
     @app.get('/servers/new')
     def new_server(request: Request):
         m.authenticated(request)

@@ -169,7 +169,9 @@ window.panelPageScripts.register(document.currentScript.src, () => {
  listen(root,'keydown',event=>{if(event.key==='Escape'){const menu=event.target.closest('.fleet-more[open]');if(menu){menu.open=false;menu.querySelector('summary').focus();}}});
  const dispose=()=>{disposed=true;clearTimeout(timer);clearInterval(expiryTimer);};signal?.addEventListener('abort',dispose,{once:true});
  if(enroll){expiry();expiryTimer=setInterval(expiry,1000);}
- poll();
+ if(list&&window.panelStream){
+  window.panelStream(statusUrl.replace(/\/status$/, '/live'),signal,value=>{updateRows(value.servers,value.summary);},value=>{const note=root.querySelector('[data-fleet-refresh]');if(note)note.textContent=value;});
+ }else poll();
 })();
 
 });

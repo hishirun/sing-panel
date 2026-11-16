@@ -401,6 +401,14 @@ class Core:
             self.error = str(error)[:1200]
             log.warning('Core reconciliation failed: %s', self.error)
 
+    def log_tail(self):
+        try:
+            with (self.directory/'core.log').open('rb') as file:
+                file.seek(0,2);size=file.tell();file.seek(max(0,size-8192))
+                text=file.read(8192).decode('utf-8',errors='replace')
+            return text.partition('\n')[2] if size>8192 else text
+        except OSError:return ''
+
     def report(self):
         with self.lock:
             queued = self.spool.oldest()
@@ -416,6 +424,7 @@ class Core:
                 except Exception:
                     machine.update(connection_count=None, online_users=None)
             return {'type': 'report', 'protocol': 1, **report, 'metrics': machine,
+                    'logs': self.log_tail(),
                     'applied_revision': self.state['revision'], 'error': self.error,
                     'apply_result': dict(self.state['apply_result']) or None,
                     'connections': connections, 'connections_truncated': truncated,

@@ -547,6 +547,21 @@ install_customer_auth(app, sys.modules[__name__])
 
 @app.get('/s/{token}/{format}')
 def subscription(request: Request, token: str, format: str):
+    from .diagnostics import record
+    user=subscription_user(token)
+    started=time.monotonic()
+    try:
+        response=subscription_response(request,token,format)
+    except HTTPException as error:
+        record(DB,user['id'],request.headers.get('user-agent',''),format,error.status_code,0,started)
+        raise
+    except Exception:
+        record(DB,user['id'],request.headers.get('user-agent',''),format,500,0,started)
+        raise
+    record(DB,user['id'],request.headers.get('user-agent',''),response.headers.get('X-Subscription-Format',''),response.status_code,int(response.headers.get('X-Subscription-Node-Count',0)),started)
+    return response
+
+def subscription_response(request: Request, token: str, format: str):
     from .client_profiles import resolve_format, singbox_profile, mihomo_profile, ini_profile
     from .subscriptions import native_subscription
     import base64
@@ -608,3 +623,6 @@ from .agent_downloads import install as install_agent_downloads
 install_agent_downloads(app,sys.modules[__name__])
 from .backups import install as install_backups
 install_backups(app,sys.modules[__name__])
+
+from .diagnostics import install as install_diagnostics
+install_diagnostics(app,sys.modules[__name__])

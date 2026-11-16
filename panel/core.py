@@ -75,6 +75,8 @@ def init_db(path):
         db.execute('CREATE INDEX IF NOT EXISTS daily_user_day ON daily(user_id,day)')
         db.execute('CREATE INDEX IF NOT EXISTS node_daily_user_day ON node_daily(user_id,day,node_id)')
         db.execute('CREATE INDEX IF NOT EXISTS node_hourly_user_hour ON node_hourly(user_id,hour,node_id)')
+        from .diagnostics import migrate as migrate_diagnostics
+        migrate_diagnostics(db)
         from .management import migrate
         migrate(db)
         from .user_routing import migrate as migrate_user_routing

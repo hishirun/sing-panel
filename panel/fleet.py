@@ -565,6 +565,11 @@ def process_report(path, identity, report, configuration_fn, account_fn, stats_p
             db.execute('UPDATE servers SET last_seen=?,connected=1,metrics=?,applied_revision=?,error=?,presence=?,connections_truncated=? WHERE id=?',
                        (now, json.dumps(metrics, ensure_ascii=False), applied, error[:2000],
                         json.dumps(connections), int(truncated), identity))
+        if isinstance(report.get('logs'),str):
+            from .diagnostics import clean_log
+            content=clean_log(report['logs'])
+            with connect(path) as db:
+                db.execute('INSERT INTO server_logs VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET timestamp=excluded.timestamp,content=excluded.content',(identity,now,content))
         if traffic_fn is None:
             from .server_traffic import record as traffic_fn
         traffic = traffic_fn(path, identity, metrics)
