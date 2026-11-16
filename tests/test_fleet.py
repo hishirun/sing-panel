@@ -29,8 +29,8 @@ def configured(path, identity, port=32001):
     uid, nid = uuid.uuid4().hex, uuid.uuid4().hex
     with connect(path) as db:
         db.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',
-                   (uid, 'A', 'user-secret', str(uuid.uuid4()), secrets.token_urlsafe(32)))
-        db.execute("INSERT INTO nodes(id,name,protocol,port,secret,server_id) VALUES(?,?,'snell6',?,'node-secret',?)", (nid, 'N', port, identity))
+                   (uid, 'A', 'user-secret-123456789', str(uuid.uuid4()), secrets.token_urlsafe(32)))
+        db.execute("INSERT INTO nodes(id,name,protocol,port,secret,server_id) VALUES(?,?,'snell6',?,'node-secret-123456789',?)", (nid, 'N', port, identity))
         db.execute('INSERT INTO memberships(user_id,node_id) VALUES(?,?)', (uid, nid))
     name = nid + ':' + uid
     document = {'inbounds': [], 'outbounds': [{'type': 'direct', 'tag': 'direct'}],

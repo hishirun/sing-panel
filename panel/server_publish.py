@@ -68,7 +68,12 @@ class Coordinator:
         from .routing import prepare_rule_sets,set_rule_paths
         with self.guard:lock=self.locks.setdefault(sid,threading.Lock())
         # Only another request for this server can wait on this lock.
-        with lock:
+        if not lock.acquire(blocking=False):
+            def preparing(*args):raise Pending('配置准备中')
+            with self.m.runtime.lock:
+                return fleet.process_report(self.m.DB,sid,report,preparing,account,stats_port=19190,
+                    credential_generation=credential_generation,connection_generation=connection_generation)
+        try:
             def cached(*args):
                 signature=input_signature(self.m.DB,sid)
                 cached=self.cache.get(sid)
@@ -108,10 +113,15 @@ class Coordinator:
                     self.mark(sid,'ready','已校验，等待机器确认',digest)
                     return exchange()
             except fleet.AuthenticationError:raise
-            except Exception:
+            except Exception as error:
+                from .diagnostics import clean_log
                 self.failures[sid]=(signature,time.monotonic(),retries)
-                self.mark(sid,'failed','此机器配置校验失败，请检查节点、证书或规则集')
+                detail=clean_log(str(error))[-700:] if isinstance(error,(ValueError,OSError)) else ''
+                self.mark(sid,'failed','此机器配置校验失败'+('：'+detail if detail else '，请检查节点、证书或规则集'))
                 return result
             finally:
                 import shutil
                 shutil.rmtree(snapshot.parent,ignore_errors=True)
+
+        finally:
+            lock.release()

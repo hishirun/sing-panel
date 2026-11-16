@@ -134,3 +134,17 @@ def test_agent_keeps_batch_when_old_controller_cannot_confirm_timestamped_accoun
         def recv(self,timeout):return json.dumps({'type':'desired','protocol':1,'ack_report_id':self.message['report_id']})
     with pytest.raises(ValueError,match='timestamped accounting'):instance.exchange(OldController())
     assert instance.core.spool.oldest()==before
+
+
+def test_renewal_and_calendar_reset_keep_latest_accounting_boundary(tmp_path):
+    import json
+    from panel.management import maintain
+    path,sid,uid,nid,doc,key=system(tmp_path)
+    now=int(time.time());today=now//86400*86400
+    # Renewal happened this morning; the calendar reset was at midnight.
+    renewal=today+3600 if now>today+3600 else today-3600
+    with connect(path) as db:
+        policy={'renew_mode':'days','renew_days':1,'renew_limit':0,'renew_count':0,'reset_mode':'daily','reset_days':1,'reset_day':1,'reset_weekday':1,'next_reset':today+86400}
+        db.execute('UPDATE users SET expires=?,activated_at=1,policy=? WHERE id=?',(renewal,json.dumps(policy),uid))
+    maintain(path,now=now)
+    with connect(path) as db:assert db.execute('SELECT since FROM user_accounting_windows WHERE user_id=?',(uid,)).fetchone()[0]==max(renewal,today)

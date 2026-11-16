@@ -26,6 +26,8 @@ def test_slow_machine_validates_outside_shared_lock_and_caches(client,monkeypatc
         try:
             assert entered.wait(2)
             assert m.runtime.lock.acquire(timeout=.5);m.runtime.lock.release()
+            busy=pool.submit(m.server_publisher.reconcile,a,report(),None,None).result(timeout=1)
+            assert busy['lease_seconds']==0
             fast=pool.submit(m.server_publisher.reconcile,b,report(),None,None).result(timeout=2)
             assert fast['state']=='running' and fast['config']['inbounds'][0]['tag']==nb
         finally:release.set()

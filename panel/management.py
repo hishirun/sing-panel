@@ -81,7 +81,7 @@ def maintain(path,now=None):
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
         for row in db.execute('SELECT * FROM users').fetchall():
-            u=dict(row);p=json.loads(u['policy']);expires=u['expires'];reset=False;changed=False
+            u=dict(row);p=json.loads(u['policy']);expires=u['expires'];reset=False;changed=False;cutoff=0
             if u['enabled'] and (u['activated_at'] or not p.get('first_use_days')) and expires and expires<=now and p.get('renew_mode','none')!='none':
                 count=p.get('renew_count',0);limit=p.get('renew_limit',0)
                 # Catch up a fixed interval arithmetically; calendar loops are bounded by the allowed date range.
@@ -96,6 +96,7 @@ def maintain(path,now=None):
                 if changed:
                     p['renew_count']=count
                     reset=expires>now
+                    if reset:cutoff=cycle_start(expires,p['renew_mode'],p.get('renew_days',30),p.get('renew_day',1))
                     audit(db,'自动续期',u['name']+f'，累计 {count} 次')
             mode=p.get('reset_mode','none')
             if mode!='none' and u['enabled'] and not (p.get('first_use_days') and not u['activated_at']):
@@ -107,7 +108,7 @@ def maintain(path,now=None):
                     p['next_reset']=(due+((now-due)//(p['reset_days']*DAY)+1)*p['reset_days']*DAY) if mode=='days' else next_boundary(now,mode,p['reset_days'],p['reset_day'],p['reset_weekday'])
                     audit(db,'周期流量重置',u['name'])
             if reset:
-                cutoff=cycle_start(p['next_reset'],mode,p.get('reset_days',30),p.get('reset_day',1)) if mode!='none' else cycle_start(expires,p['renew_mode'],p.get('renew_days',30),p.get('renew_day',1))
+                if mode!='none':cutoff=max(cutoff,cycle_start(p['next_reset'],mode,p.get('reset_days',30),p.get('reset_day',1)))
                 db.execute('INSERT INTO user_accounting_windows VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET since=MAX(since,excluded.since)',(u['id'],cutoff))
             if changed:
                 db.execute('UPDATE users SET policy=?,expires=?,upload=CASE WHEN ? THEN 0 ELSE upload END,download=CASE WHEN ? THEN 0 ELSE download END WHERE id=?',
