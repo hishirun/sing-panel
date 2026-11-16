@@ -68,7 +68,14 @@ def ini_proxy(out, surfboard=False):
     prefix = f"{out['tag']} = {kind}, {ini_value(host)}, {out['server_port']}"
     if kind=='shadowsocks':
         if out['method']=='2022-blake3-chacha20-poly1305':return None
-        return f"{out['tag']} = ss, {ini_value(host)}, {out['server_port']}, encrypt-method={out['method']}, password={ini_value(out['password'])}, udp-relay={str(out.get('network')!='tcp').lower()}"
+        line=f"{out['tag']} = ss, {ini_value(host)}, {out['server_port']}, encrypt-method={out['method']}, password={ini_value(out['password'])}, udp-relay={str(out.get('network')!='tcp').lower()}"
+        if out.get('_shadowtls'):
+            if surfboard:return None
+            wrapper=out['_shadowtls']
+            line+=', shadow-tls-version=3, shadow-tls-sni='+ini_value(wrapper['tls']['server_name'])+', shadow-tls-password='+ini_value(wrapper['password'])
+        return line
+    if kind=='tuic':
+        return f"{out['tag']} = tuic-v5, {ini_value(host)}, {out['server_port']}, uuid={out['uuid']}, password={ini_value(out['password'])}, sni={ini_value(out['tls']['server_name'])}, alpn={ini_value(','.join(out['tls'].get('alpn',['h3'])))}, skip-cert-verify=false"
     if kind=='trojan':
         transport=out.get('transport',{})
         if transport.get('type')=='grpc':return None
@@ -125,6 +132,9 @@ def mihomo_proxy(out):
     p = {'name': out['tag'], 'type': kind, 'server': out['server'], 'port': out['server_port'], 'udp': True}
     if kind=='shadowsocks':
         p.update(type='ss',cipher=out['method'],password=out['password'],udp=out.get('network')!='tcp')
+        if out.get('_shadowtls'):
+            wrapper=out['_shadowtls']
+            p.update(plugin='shadow-tls',**{'plugin-opts':{'host':wrapper['tls']['server_name'],'password':wrapper['password'],'version':3}})
         return p
     if kind=='trojan':
         tls=out['tls'];p.update(password=out['password'],sni=tls['server_name'],**{'skip-cert-verify':False})
@@ -141,7 +151,7 @@ def mihomo_proxy(out):
         if out.get('obfs_mode') == 'http':
             p['obfs-opts'] = {'mode': 'http', 'host': out.get('obfs_host', 'bing.com')}
         return p
-    if kind not in ('vless', 'anytls', 'hysteria2'):
+    if kind not in ('vless', 'anytls', 'hysteria2', 'tuic'):
         return None
     tls = out['tls']
     p.update(sni=tls['server_name'], **{'skip-cert-verify': tls.get('insecure', False)})
@@ -154,6 +164,8 @@ def mihomo_proxy(out):
         p['reality-opts'] = {'public-key': tls['reality']['public_key'], 'short-id': tls['reality']['short_id']}
     else:
         p['password'] = out['password']
+    if kind=='tuic':
+        p.update(uuid=out['uuid'],**{'congestion-controller':out['congestion_control'],'udp-relay-mode':out['udp_relay_mode'],'heartbeat-interval':int(out['heartbeat'].removesuffix('s'))*1000,'reduce-rtt':False})
     if kind == 'anytls':
         p['client-fingerprint'] = 'chrome'
         for key in ('idle_session_check_interval', 'idle_session_timeout', 'min_idle_session'):
@@ -192,6 +204,7 @@ def mihomo_profile(outs, url):
 
 
 def singbox_profile(outs, url, ua=''):
+    from .protocols import expand_singbox_nodes
     nodes = named_outbounds(outs)
     version = re.search(r'sing-?box[/\s]+(\d+)\.(\d+)', ua, re.I)
     if version and tuple(map(int, version.groups())) < (1,12):
@@ -214,7 +227,7 @@ def singbox_profile(outs, url, ua=''):
              'mtu':1500,'auto_route':True,'strict_route':True,'stack':'system'},
             {'type':'socks','tag':'socks-in','listen':'127.0.0.1','listen_port':2333},
             {'type':'mixed','tag':'mixed-in','listen':'127.0.0.1','listen_port':2334}],
-        'outbounds': nodes + [{'type':'selector','tag':'节点选择','default':'自动选择','outbounds':['自动选择']+names},
+        'outbounds': expand_singbox_nodes(nodes) + [{'type':'selector','tag':'节点选择','default':'自动选择','outbounds':['自动选择']+names},
                              {'type':'urltest','tag':'自动选择','outbounds':names or ['direct'],
                               'url':'https://www.gstatic.com/generate_204','interval':'3m'},
                              {'type':'direct','tag':'direct'}],

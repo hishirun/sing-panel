@@ -11,7 +11,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
     const transport=document.querySelector('[name="trojan_transport"]');
     for(const kind of ['ws','grpc'])document.querySelectorAll('[data-trojan-'+kind+']').forEach(el=>{el.hidden=transport?.value!==kind;el.querySelectorAll('input').forEach(input=>input.disabled=el.hidden);});
     const method=document.querySelector('[name="ss_method"]');
-    if(method&&mode){const shared=mode.querySelector('[value="shared"]');if(shared){shared.disabled=method.value==='2022-blake3-chacha20-poly1305';if(shared.disabled&&mode.value==='shared'){mode.value='compat';mode.dispatchEvent(new Event('change',{bubbles:true}));}}}
+    if(method&&mode){const shared=mode.querySelector('[value="shared"]');if(shared){shared.disabled=!method.value.startsWith('2022-')||method.value==='2022-blake3-chacha20-poly1305';if(shared.disabled&&mode.value==='shared'){mode.value='compat';mode.dispatchEvent(new Event('change',{bubbles:true}));}}}
     document.querySelectorAll('[data-ss-shared]').forEach(el=>{el.hidden=mode?.value!=='shared';el.querySelectorAll('input').forEach(input=>input.disabled=el.hidden);});
     if(select){
       document.querySelectorAll('[data-hy-obfs]').forEach(el=>{el.hidden=select.value==='none';});

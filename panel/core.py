@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from .options import listen_options, snell_options, reality_tls, options, certificate_tls, hysteria_options
 
-PROTOCOLS = ('snell5', 'snell6', 'reality', 'hysteria2', 'anytls', 'ss', 'ss2022', 'trojan')
+PROTOCOLS = ('snell5', 'snell6', 'reality', 'hysteria2', 'anytls', 'ss', 'ss2022', 'trojan', 'tuic', 'shadowtls')
 
 class DatabaseConnection(sqlite3.Connection):
     """Commit or roll back, then release the connection at the scope boundary."""
@@ -127,12 +127,22 @@ def config(nodes, users, memberships, stats_port=19090):
         # Empty users on some protocols means unauthenticated/default access.
         if not n['enabled'] or not allowed:
             continue
-        if n.get('mode')=='compat' and n['protocol'] in ('snell5','snell6','ss','ss2022'):
+        if n.get('mode')=='compat' and n['protocol'] in ('snell5','snell6','ss','ss2022','shadowtls'):
             for u in allowed:
                 tag=n['id']+':'+u['id']
                 compat_tags.append(tag)
                 inbound={'tag':tag,'listen_port':grants[(u['id'],n['id'])]['port'],**listen_options(n)}
-                if n['protocol'] in ('ss','ss2022'):
+                if n['protocol']=='shadowtls':
+                    from .protocols import user_key, shadow_password, SS_2022
+                    o=options(n)
+                    inbounds.append({**inbound,'type':'shadowtls','tag':tag+':st','version':3,
+                        'users':[{'name':tag,'password':shadow_password(n,u)}],
+                        'handshake':{'server':o['handshake_host'] or n['server_name'],'server_port':o['handshake_port']},
+                        'strict_mode':True,'detour':tag})
+                    # Injected only: the backend has no socket that could bypass ShadowTLS.
+                    inbound={'type':'shadowsocks','tag':tag,'method':o['ss_method'],'network':'tcp',
+                        'password':user_key(n,u) if o['ss_method'] in SS_2022 else u['secret']}
+                elif n['protocol'] in ('ss','ss2022'):
                     from .protocols import user_key
                     o=options(n)
                     inbound.update(type='shadowsocks',method=o['ss_method'],password=user_key(n,u) if n['protocol']=='ss2022' else u['secret'])
@@ -146,9 +156,14 @@ def config(nodes, users, memberships, stats_port=19090):
             o=options(n)
             i.update(type='shadowsocks',method=o['ss_method'],password=n['secret'],users=[{'name':n['id']+':'+u['id'],'password':user_key(n,u)} for u in allowed])
             if o['network']!='both':i['network']=o['network']
-        elif n['protocol'] in ('hysteria2','anytls','trojan'):
+        elif n['protocol'] in ('hysteria2','anytls','trojan','tuic'):
             i.update(type=n['protocol'],users=[{'name':n['id']+':'+u['id'],'password':u['secret']} for u in allowed],tls=certificate_tls(n))
-            if n['protocol']=='hysteria2':
+            if n['protocol']=='tuic':
+                from .options import tuic_options
+                i={k:v for k,v in i.items() if not k.startswith('tcp_') and k!='disable_tcp_keep_alive'}
+                i['users']=[{'name':n['id']+':'+u['id'],'uuid':u['uuid'],'password':u['secret']} for u in allowed]
+                i.update(tuic_options(n))
+            elif n['protocol']=='hysteria2':
                 i={k:v for k,v in i.items() if not k.startswith('tcp_') and k!='disable_tcp_keep_alive'}
                 i.update(hysteria_options(n))
             elif n['protocol']=='trojan':
@@ -165,7 +180,7 @@ def config(nodes, users, memberships, stats_port=19090):
     return {'log': {'level': 'warn', 'timestamp': True}, 'inbounds': inbounds,
             'outbounds': [{'type': 'direct', 'tag': 'direct'}],
             'experimental': {'v2ray_api': {'listen': f'127.0.0.1:{stats_port}',
-                'stats': {'enabled': True, 'users': [entry['name'] for inbound in inbounds for entry in inbound.get('users',[])], 'inbounds':compat_tags}}}}
+                'stats': {'enabled': True, 'users': [entry['name'] for inbound in inbounds if inbound['type']!='shadowtls' for entry in inbound.get('users',[])], 'inbounds':compat_tags}}}}
 
 def current_config(path, stats_port=19090, server_id='local'):
     with connect(path) as db:
@@ -190,6 +205,7 @@ def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=Fal
     day = day or time.strftime('%Y-%m-%d', time.gmtime(stamp))
     with (connect(path) if _connection is None else nullcontext(_connection)) as db:
         if _connection is None:db.execute('BEGIN IMMEDIATE')
+        node_meta={}
         for counter, value in counters.items():
             parts = counter.split('>>>')
             if len(parts)!=4 or parts[0] not in ('user','inbound') or parts[2]!='traffic':
@@ -200,8 +216,13 @@ def account(path, epoch, counters, day=None, *, server_id=None, ignore_stale=Fal
                 continue
             user = parts[1].split(':')[-1]
             node_id=parts[1].rsplit(':',1)[0] if ':' in parts[1] else None
+            # Only the decrypted backend counts for a composed ShadowTLS node.
+            if node_id not in node_meta:
+                node_meta[node_id]=db.execute('SELECT protocol,server_id FROM nodes WHERE id=?',(node_id,)).fetchone()
+            owner=node_meta[node_id]
+            if parts[0]=='user' and owner and owner['protocol']=='shadowtls':
+                continue
             if server_id is not None:
-                owner=db.execute('SELECT server_id FROM nodes WHERE id=?',(node_id,)).fetchone()
                 if not owner or owner['server_id'] != server_id:
                     continue
             if not db.execute('SELECT 1 FROM users WHERE id=?',(user,)).fetchone():

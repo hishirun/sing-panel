@@ -48,6 +48,7 @@ backup_manager = BackupManager(DB,DIRECTORY)
 ph = PasswordHasher()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
 templates.env.globals['asset_url'] = asset_url
+templates.env.filters['protocol_name'] = lambda p: {'ss':'Shadowsocks','ss2022':'Shadowsocks · 2022','tuic':'TUIC v5','shadowtls':'ShadowTLS v3 + SS'}.get(p,p.upper())
 templates.env.filters['bytes'] = lambda n: f'{n / 1024**3:.2f} GiB'
 templates.env.filters['traffic_bytes'] = lambda n: f'{n / 1024**3:.2f} GiB' if n>=1024**3 else f'{n / 1024**2:.2f} MiB' if n>=1024**2 else f'{n / 1024:.2f} KiB' if n>=1024 else f'{n} B'
 templates.env.filters['datetime'] = lambda n: datetime.fromtimestamp(n,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if n else '暂无'
@@ -246,7 +247,7 @@ def editor(request, node=None, values=None, error='', notice='', status=200):
     context.pop('psk',None)
     context.pop('ss_server_key',None)
     response=render(request,'node_editor.html',node=node,values=context,error=error,notice=notice,
-                    presets=PRESETS,fingerprints=FINGERPRINTS,ss_methods=SS_2022 if context['protocol']=='ss2022' else SS_CLASSIC,servers=server_choices())
+                    presets=PRESETS,fingerprints=FINGERPRINTS,ss_methods=SS_CLASSIC+SS_2022,servers=server_choices())
     response.status_code=status
     return response
 
@@ -257,9 +258,10 @@ def new_node(request: Request, protocol: str='snell6', server_id: str='local'):
         raise HTTPException(422,'协议无效')
     if server_id not in {s['id'] for s in server_choices()}:
         raise HTTPException(422,'请选择可用的服务器')
-    values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol=='reality' else '', 'server_id':server_id}
+    values={'protocol':protocol,'server_name':'www.cloudflare.com' if protocol in ('reality','shadowtls') else '', 'server_id':server_id}
     if protocol=='ss2022':values.update(ss_method=SS_2022[0],mode='shared')
-    if protocol in ('hysteria2','anytls','trojan') and (DIRECTORY/'tls/fullchain.pem').exists():
+    if protocol=='shadowtls':values.update(ss_method=SS_2022[0],mode='compat')
+    if protocol in ('hysteria2','anytls','trojan','tuic') and (DIRECTORY/'tls/fullchain.pem').exists():
         from urllib.parse import urlsplit
         values.update(certificate_path=str(DIRECTORY/'tls/fullchain.pem'),key_path=str(DIRECTORY/'tls/privkey.pem'),server_name=urlsplit(read_settings(DB)['public_url']).hostname or '')
     return editor(request,values=values)
@@ -295,15 +297,21 @@ def save_node_sync(request,raw,identity=None):
             raise ValueError('请选择已启用的服务器')
         protocol=node['protocol'] if node else str(raw.get('protocol','snell6'))
         if protocol not in PROTOCOLS:raise ValueError('协议无效')
-        defaults={'ss_method':options(node)['ss_method'] if node else SS_2022[0] if protocol=='ss2022' else SS_CLASSIC[2]}
+        if protocol=='shadowtls' and server_id!='local':
+            from .fleet import get_server
+            server=get_server(DB,server_id)
+            version=re.match(r'^(\d+)\.(\d+)\.(\d+)',server['agent_version'])
+            if server['enrolled'] and (not version or tuple(map(int,version.groups()))<(0,2,1)):
+                raise ValueError('ShadowTLS 组合节点需要 Agent 0.2.1 或更新版本，请先在服务器管理中更新 Agent')
+        defaults={'ss_method':options(node)['ss_method'] if node else SS_2022[0] if protocol in ('ss2022','shadowtls') else SS_CLASSIC[2]}
         settings=NodeOptions.model_validate({**defaults,**raw})
-        mode='shared' if protocol in ('reality','hysteria2','anytls','trojan') else 'compat' if protocol=='ss' else str(raw.get('mode','shared' if protocol=='ss2022' else 'compat'))
+        if protocol in ('ss','ss2022'):protocol='ss2022' if settings.ss_method in SS_2022 else 'ss'
+        mode='shared' if protocol in ('reality','hysteria2','anytls','trojan','tuic') else 'compat' if protocol in ('ss','shadowtls') else str(raw.get('mode','shared' if protocol=='ss2022' else 'compat'))
         if mode not in ('shared','compat'):raise ValueError('用户模式无效')
         if protocol in ('ss','ss2022'):
-            if settings.ss_method not in (SS_CLASSIC if protocol=='ss' else SS_2022):raise ValueError('加密方式与节点协议不匹配')
             if protocol=='ss2022' and mode=='shared' and settings.ss_method==SS_2022[2]:raise ValueError('ChaCha20 SS2022 请使用独立端口模式')
-        sni=domain(str(raw.get('server_name',''))) if protocol in ('reality','hysteria2','anytls','trojan') else ''
-        if protocol in ('hysteria2','anytls','trojan'):
+        sni=domain(str(raw.get('server_name',''))) if protocol in ('reality','hysteria2','anytls','trojan','tuic','shadowtls') else ''
+        if protocol in ('hysteria2','anytls','trojan','tuic'):
             if not settings.certificate_path or not settings.key_path:raise ValueError('请填写证书链与私钥文件路径')
             certificate_check=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             certificate_check.load_cert_chain(settings.certificate_path,settings.key_path)
@@ -312,10 +320,10 @@ def save_node_sync(request,raw,identity=None):
                 if result.returncode:raise ValueError('证书已过期或未覆盖该 SNI 域名')
             if protocol=='trojan' and settings.trojan_transport in ('ws','grpc') and settings.tls_alpn not in ('','http/1.1' if settings.trojan_transport=='ws' else 'h2'):
                 raise ValueError('WebSocket ALPN 请留空或填 http/1.1；gRPC 请留空或填 h2')
-            if protocol=='hysteria2' and settings.tls_min_version!='1.3':raise ValueError('Hysteria2 使用 TLS 1.3')
-            if protocol=='hysteria2' and settings.tls_alpn and settings.tls_alpn!='h3':raise ValueError('Hysteria2 ALPN 请留空或填写 h3')
+            if protocol in ('hysteria2','tuic') and settings.tls_min_version!='1.3':raise ValueError('QUIC 节点使用 TLS 1.3')
+            if protocol in ('hysteria2','tuic') and settings.tls_alpn and settings.tls_alpn!='h3':raise ValueError('QUIC 节点 ALPN 请留空或填写 h3')
         if raw.get('intent')=='probe':
-            if protocol!='reality':raise ValueError('只有 Reality 节点需要 TLS 握手检测')
+            if protocol not in ('reality','shadowtls'):raise ValueError('此协议不使用外部 TLS 握手目标')
             result=probe_tls(settings.handshake_host or sni,settings.handshake_port,sni)
             authenticated(request)
             return editor(request,node,raw,notice=result)

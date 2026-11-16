@@ -305,9 +305,9 @@ def test_update_hash_failure_and_failed_start_preserve_current_release(tmp_path,
     data.mkdir()
     config = {'install_dir': str(tmp_path / 'install'), 'data_dir': str(data), 'panel': 'https://panel.example'}
     requirements = (Path(update.__file__).parent / 'requirements.txt').read_bytes()
-    bundle = archive({'agent/__init__.py': b"__version__ = '0.2.0'\n", 'agent/__main__.py': b'raise SystemExit(1)\n',
+    bundle = archive({'agent/__init__.py': b"__version__ = '0.2.1'\n", 'agent/__main__.py': b'raise SystemExit(1)\n',
                       'agent/requirements.txt': requirements})
-    manifest = {'version': '0.2.0', 'bundle': {'url': '/agent/bundle.tar.gz', 'sha256': '0' * 64}}
+    manifest = {'version': '0.2.1', 'bundle': {'url': '/agent/bundle.tar.gz', 'sha256': '0' * 64}}
     monkeypatch.setattr(update, 'request', lambda panel, path, **kwargs: json.dumps(manifest).encode() if path.endswith('manifest.json') else bundle)
     with pytest.raises(ValueError, match='校验失败'):
         update.stage(config, data / 'runtime.json')
@@ -331,12 +331,12 @@ def test_update_release_switch_is_scoped_and_commits_after_controller_health(tmp
     queue.store('surviving-epoch', counter(99))
     config = {'install_dir': str(tmp_path / 'install'), 'data_dir': str(data), 'panel': 'https://panel.example'}
     requirements = (Path(update.__file__).parent / 'requirements.txt').read_bytes()
-    bundle = archive({'agent/__init__.py': b"__version__ = '0.2.0'\n", 'agent/__main__.py': b"print('0.2.0')\n",
+    bundle = archive({'agent/__init__.py': b"__version__ = '0.2.1'\n", 'agent/__main__.py': b"print('0.2.1')\n",
                       'agent/requirements.txt': requirements, 'deploy/sing-panel-agent.service': b'ignored'})
-    manifest = {'version': '0.2.0', 'bundle': {'url': '/agent/bundle.tar.gz', 'sha256': hashlib.sha256(bundle).hexdigest()}}
+    manifest = {'version': '0.2.1', 'bundle': {'url': '/agent/bundle.tar.gz', 'sha256': hashlib.sha256(bundle).hexdigest()}}
     monkeypatch.setattr(update, 'request', lambda panel, path, **kwargs: json.dumps(manifest).encode() if path.endswith('manifest.json') else bundle)
     assert update.stage(config, data / 'runtime.json')
-    assert os.readlink(releases / 'current').startswith('0.2.0-')
+    assert os.readlink(releases / 'current').startswith('0.2.1-')
     assert read_json(data / 'config.json') == {'credential': 'unchanged'}
     assert Spool(data).oldest()['counters'] == counter(99)
     assert not (tmp_path / 'install' / 'deploy').exists()

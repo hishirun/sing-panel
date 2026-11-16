@@ -22,7 +22,7 @@ def migrate(db):
 def clean_log(value):
     text=str(value)[-16384:]
     text=re.sub(r'\x1b\[[0-9;]*[A-Za-z]','',text)
-    text=re.sub(r'(?:https?|ss|snell|vless|hysteria2|anytls)://[^\s]+','[链接已隐藏]',text,flags=re.I)
+    text=re.sub(r'(?:https?|ss|snell|vless|hysteria2|anytls|trojan|tuic|shadowtls)://[^\s]+','[链接已隐藏]',text,flags=re.I)
     text=re.sub(r'(?i)(password|psk|userkey|private_key|token|authorization)([\s=:"\x27]+)[^\s,;]+',r'\1\2[隐藏]',text)
     return ''.join(c for c in text if c in '\n\t' or ord(c)>=32)[-12000:]
 

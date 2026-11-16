@@ -22,16 +22,24 @@ def outbounds(user,nodes,memberships,host):
                 out['psk']=user['secret']
                 out['server_port']=allowed[n['id']]['port']
                 del out['userkey']
-        elif n['protocol'] in ('ss','ss2022'):
-            from .protocols import user_key
-            password=user_key(n,user) if n['protocol']=='ss2022' else user['secret']
+        elif n['protocol'] in ('ss','ss2022','shadowtls'):
+            from .protocols import user_key, shadow_password, SS_2022
+            password=user_key(n,user) if o['ss_method'] in SS_2022 else user['secret']
             if n.get('mode')=='compat':out['server_port']=allowed[n['id']]['port']
             else:password=n['secret']+':'+password
             out.update(type='shadowsocks',method=o['ss_method'],password=password)
             if o['network']!='both':out['network']=o['network']
-        elif n['protocol'] in ('anytls','hysteria2','trojan'):
+            if n['protocol']=='shadowtls':
+                out['network']='tcp'
+                out['_shadowtls']={'type':'shadowtls','version':3,'server':out['server'],'server_port':out['server_port'],
+                    'password':shadow_password(n,user),'tls':{'enabled':True,'server_name':n['server_name'],
+                    'utls':{'enabled':True,'fingerprint':o['fingerprint']}}}
+        elif n['protocol'] in ('anytls','hysteria2','trojan','tuic'):
             out.update(type=n['protocol'],password=user['secret'],tls=certificate_tls(n,client=True))
-            if n['protocol']=='hysteria2':out.update(hysteria_options(n,client=True))
+            if n['protocol']=='tuic':
+                from .options import tuic_options
+                out.update(uuid=user['uuid'],**tuic_options(n,client=True))
+            elif n['protocol']=='hysteria2':out.update(hysteria_options(n,client=True))
             elif n['protocol']=='trojan':
                 from .protocols import transport
                 if transport(n):out['transport']=transport(n)
@@ -47,7 +55,7 @@ def native_subscription(outs,format):
     from urllib.parse import quote
     lines=[]
     for o in outs:
-        if o['type'] in ('shadowsocks','trojan'):
+        if o['type'] in ('shadowsocks','trojan','tuic'):
             if format=='surge.conf':
                 from .client_profiles import ini_proxy,named_outbounds
                 line=ini_proxy(named_outbounds([o])[0])
@@ -57,7 +65,17 @@ def native_subscription(outs,format):
             host=o['server'];host='['+host+']' if ':' in host else host
             if o['type']=='shadowsocks':
                 credential=(o['method']+':'+quote(o['password'],safe='')) if o['method'].startswith('2022-') else base64.urlsafe_b64encode((o['method']+':'+o['password']).encode()).decode().rstrip('=')
-                lines.append(f"ss://{credential}@{host}:{o['server_port']}#{quote(o['tag'],safe='')}")
+                suffix=''
+                if o.get('_shadowtls'):
+                    import json
+                    wrapper=o['_shadowtls']
+                    data={'version':3,'host':wrapper['tls']['server_name'],'password':wrapper['password']}
+                    suffix='/?shadow-tls='+base64.b64encode(json.dumps(data,separators=(',',':')).encode()).decode()
+                lines.append(f"ss://{credential}@{host}:{o['server_port']}{suffix}#{quote(o['tag'],safe='')}")
+            elif o['type']=='tuic':
+                params={'sni':o['tls']['server_name'],'alpn':','.join(o['tls'].get('alpn',['h3'])),
+                    'congestion_control':o['congestion_control'],'udp_relay_mode':o['udp_relay_mode'],'allow_insecure':'0'}
+                lines.append(f"tuic://{o['uuid']}:{quote(o['password'],safe='')}@{host}:{o['server_port']}?{urlencode(params)}#{quote(o['tag'],safe='')}")
             else:
                 params={'security':'tls','sni':o['tls']['server_name'],'type':'tcp'}
                 if o['tls'].get('alpn'):params['alpn']=','.join(o['tls']['alpn'])

@@ -159,6 +159,11 @@ class Core:
         if not isinstance(document, dict) or not isinstance(document.get('inbounds', []), list):
             raise ValueError('Invalid core document')
         for inbound in document.get('inbounds', []):
+            if 'listen_port' not in inbound and inbound.get('type')=='shadowsocks' and 'listen' not in inbound:
+                wrappers=[i for i in document['inbounds'] if i.get('detour')==inbound.get('tag')]
+                if inbound.get('tag') and wrappers and all(i.get('type')=='shadowtls' and i.get('version')==3 and i.get('strict_mode') is True for i in wrappers):
+                    continue
+                raise ValueError('Injected Shadowsocks requires a strict ShadowTLS v3 wrapper')
             port = inbound.get('listen_port')
             if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
                 raise ValueError('Agent nodes require an unprivileged listen port')

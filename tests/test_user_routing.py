@@ -244,7 +244,7 @@ def test_account_inactive_read_only_and_no_personal_routes(policy_db):
 @pytest.mark.skipif(not os.environ.get('SING_BOX'), reason='SING_BOX required')
 @pytest.mark.parametrize('protocol,mode', [
     ('snell5', 'shared'), ('snell5', 'compat'), ('snell6', 'shared'), ('snell6', 'compat'),
-    ('hysteria2', 'shared'), ('anytls', 'shared'), ('reality', 'shared'),
+    ('hysteria2', 'shared'), ('anytls', 'shared'), ('reality', 'shared'), ('tuic','shared'), ('shadowtls','compat'),
 ])
 def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, mode):
     """Identical destinations reach different local SS exits per authenticated user."""
@@ -303,11 +303,24 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
         cert, key = tmp_path/'cert.pem', tmp_path/'key.pem'
         options = {'listen': '127.0.0.1'}
         private, public, sni = '', '', 'localhost'
-        if protocol in ('hysteria2', 'anytls'):
+        if protocol in ('hysteria2', 'anytls','tuic','shadowtls'):
             subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
                             '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost',
                             '-keyout', str(key), '-out', str(cert)], capture_output=True, check=True)
             options.update(certificate_path=str(cert), key_path=str(key))
+        if protocol=='shadowtls':
+            import ssl
+            class Handshake(BaseHTTPRequestHandler):
+                def do_GET(self):self.send_response(200);self.end_headers()
+                def log_message(self,*args):pass
+                def handle(self):
+                    try:super().handle()
+                    except (OSError,ValueError):pass
+            handshake=ThreadingHTTPServer(('127.0.0.1',0),Handshake);targets.append(handshake)
+            ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.minimum_version=ssl.TLSVersion.TLSv1_3;ctx.load_cert_chain(cert,key)
+            handshake.socket=ctx.wrap_socket(handshake.socket,server_side=True)
+            worker=threading.Thread(target=handshake.serve_forever,daemon=True);worker.start();threads.append(worker)
+            options.update(handshake_host='127.0.0.1',handshake_port=handshake.server_port,ss_method='2022-blake3-aes-128-gcm')
         if protocol == 'reality':
             keys = subprocess.check_output([binary, 'generate', 'reality-keypair'], text=True)
             private = re.search(r'PrivateKey:\s*(\S+)', keys)[1]
@@ -334,8 +347,11 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
         clients = []
         for user in records(path, 'users'):
             outs = outbounds(user, records(path, 'nodes'), records(path, 'memberships'), '127.0.0.1')
-            if protocol in ('hysteria2', 'anytls'):
+            if protocol in ('hysteria2', 'anytls','tuic'):
                 outs[0]['tls']['certificate_path'] = str(cert)
+            if protocol=='shadowtls':outs[0]['_shadowtls']['tls']['certificate_path']=str(cert)
+            from panel.protocols import expand_singbox_nodes
+            outs=expand_singbox_nodes(outs)
             local = port();clients.append(local)
             start({'log': {'level': 'error'}, 'inbounds': [{'type': 'socks', 'listen': '127.0.0.1', 'listen_port': local}],
                    'outbounds': outs}, user['id']+'-client')
@@ -367,6 +383,7 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
                 response = b''
                 while chunk := stream.recv(4096):response += chunk
                 assert response.endswith(expected), (protocol, mode, response)
+            if protocol=='shadowtls':continue  # TCP-only wrapper
             with socket.create_connection(('127.0.0.1', local), timeout=10) as control:
                 control.settimeout(15);_, relay = socks(control, 3)
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as packet:

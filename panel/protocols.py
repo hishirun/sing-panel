@@ -24,6 +24,27 @@ def user_key(node,user):
     payload=('sing-panel:ss2022:'+node['id']+':'+method).encode()
     return base64.b64encode(hmac.new(user['secret'].encode(),payload,hashlib.sha256).digest()[:key_size(method)]).decode()
 
+def shadow_password(node,user):
+    payload=('sing-panel:shadowtls-v3:'+node['id']).encode()
+    return base64.urlsafe_b64encode(hmac.new(user['secret'].encode(),payload,hashlib.sha256).digest()).decode().rstrip('=')
+
+def expand_singbox_nodes(nodes):
+    """Materialize private ShadowTLS detours without adding helpers to selectors."""
+    import copy
+    result=[]
+    reserved={n['tag'] for n in nodes}|{'direct','节点选择','自动选择'}
+    for node in nodes:
+        node=copy.deepcopy(node)
+        wrapper=node.pop('_shadowtls',None)
+        if wrapper:
+            tag='__shadowtls_'+str(len(result)+1)
+            while tag in reserved:tag+='_'
+            reserved.add(tag)
+            node['detour']=tag
+        result.append(node)
+        if wrapper:result.append({**wrapper,'tag':tag})
+    return result
+
 def transport(node):
     from .options import options
     o=options(node)

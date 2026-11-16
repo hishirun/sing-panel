@@ -19,6 +19,10 @@ def domain(value):
     return value
 
 class NodeOptions(BaseModel):
+    tuic_congestion: Literal['cubic','new_reno','bbr'] = 'cubic'
+    tuic_auth_timeout: int = Field(3,ge=1,le=120)
+    tuic_heartbeat: int = Field(10,ge=1,le=120)
+    tuic_udp_relay: Literal['native','quic'] = 'native'
     ss_method: Literal['aes-128-gcm','aes-256-gcm','chacha20-ietf-poly1305','2022-blake3-aes-128-gcm','2022-blake3-aes-256-gcm','2022-blake3-chacha20-poly1305'] = 'chacha20-ietf-poly1305'
     trojan_transport: Literal['tcp','ws','grpc'] = 'tcp'
     ws_path: str = Field('/',max_length=2048)
@@ -225,10 +229,18 @@ def probe_tls(host,port,sni):
 def certificate_tls(node,client=False):
     o=options(node)
     tls={'enabled':True,'server_name':node['server_name'],'min_version':o['tls_min_version']}
-    alpn=o['tls_alpn'] or ('h3' if node['protocol']=='hysteria2' else '')
+    alpn=o['tls_alpn'] or ('h3' if node['protocol'] in ('hysteria2','tuic') else '')
     if alpn:tls['alpn']=alpn.split(',')
     if not client:tls.update(certificate_path=o['certificate_path'],key_path=o['key_path'])
     return tls
+
+
+def tuic_options(node,client=False):
+    o=options(node)
+    result={'congestion_control':o['tuic_congestion'],'heartbeat':f"{o['tuic_heartbeat']}s"}
+    if client:result['udp_relay_mode']=o['tuic_udp_relay']
+    else:result.update(auth_timeout=f"{o['tuic_auth_timeout']}s",zero_rtt_handshake=False)
+    return result
 
 
 def hysteria_options(node,client=False):

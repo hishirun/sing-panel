@@ -94,7 +94,7 @@ def certificate(tmp_path):
 
 
 @pytest.mark.skipif(not os.environ.get('SING_BOX'), reason='requires real sing-box binary')
-@pytest.mark.parametrize('protocol,mode', [('snell6', 'compat'), ('snell6', 'shared'), ('hysteria2', 'shared')])
+@pytest.mark.parametrize('protocol,mode', [('snell6', 'compat'), ('snell6', 'shared'), ('hysteria2', 'shared'),('tuic','shared'),('shadowtls','compat')])
 def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, certificate, protocol, mode):
     hits = []
 
@@ -163,12 +163,26 @@ def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, cer
     dns_thread = threading.Thread(target=dns_responses, daemon=True)
     dns_thread.start()
     processes, logs = [], []
+    handshake=None
     try:
         path = tmp_path / 'panel.db'
         init_db(path)
         stats_port, entry_a, entry_b = [free_port() for _ in range(3)]
         cert, key = certificate
         options = {'listen': '127.0.0.1', 'certificate_path': str(cert), 'key_path': str(key)}
+        if protocol=='shadowtls':
+            import ssl
+            class Handshake(BaseHTTPRequestHandler):
+                def do_GET(self):self.send_response(200);self.end_headers()
+                def log_message(self,*args):pass
+                def handle(self):
+                    try:super().handle()
+                    except (OSError,ValueError):pass
+            handshake=ThreadingHTTPServer(('127.0.0.1',0),Handshake)
+            ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.minimum_version=ssl.TLSVersion.TLSv1_3;ctx.load_cert_chain(cert,key)
+            handshake.socket=ctx.wrap_socket(handshake.socket,server_side=True)
+            threading.Thread(target=handshake.serve_forever,daemon=True).start()
+            options.update(handshake_host='127.0.0.1',handshake_port=handshake.server_port,ss_method='2022-blake3-aes-128-gcm')
         with connect(path) as db:
             db.execute("INSERT INTO nodes(id,name,protocol,port,secret,mode,options,server_name) VALUES('n','Fixture',?,?,'node-fixture-secret',?,?,'localhost')",
                        (protocol, entry_a, mode, json.dumps(options)))
@@ -211,8 +225,10 @@ def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, cer
             user = next(row for row in records(path, 'users') if row['id'] == uid)
             outbound = outbounds(user, records(path, 'nodes'), records(path, 'memberships'), '127.0.0.1')[0]
             outbound['tag'] = 'proxy'
-            if protocol == 'hysteria2':
+            if protocol in ('hysteria2','tuic'):
                 outbound['tls']['certificate_path'] = str(cert)
+            if protocol=='shadowtls':outbound['_shadowtls']['tls']['certificate_path']=str(cert)
+            from panel.protocols import expand_singbox_nodes
             destinations = [('stats-ip', '127.0.0.1', stats_port),
                             ('stats-host', 'blocked.test', stats_port),
                             ('private-ip', '127.0.0.1', target.server_port),
@@ -235,7 +251,7 @@ def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, cer
                                  'listen_port': udp_port, 'network': 'udp',
                                  'override_address': '198.51.100.11', 'override_port': 53})
             specs.append((uid, {'log': {'level': 'error'}, 'inbounds': inbounds,
-                                'outbounds': [outbound], 'route': {'final': 'proxy'}}, inbounds[0]['listen_port']))
+                                'outbounds': expand_singbox_nodes([outbound]), 'route': {'final': 'proxy'}}, inbounds[0]['listen_port']))
         binary = os.environ['SING_BOX']
         for name, doc, port in specs:
             config_file = tmp_path / (name + '.json')
@@ -263,10 +279,11 @@ def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, cer
             with urlopen('http://127.0.0.1:' + str(port) + '/public', timeout=3) as response:
                 assert b'fixture-only-public-result' in response.read()
         assert rebind_answers == ['198.51.100.9']
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as packet:
-            packet.settimeout(3)
-            packet.sendto(b'public-udp-query', ('127.0.0.1', udp_port))
-            assert packet.recv(4096) == b'public-udp-response'
+        if protocol!='shadowtls':
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as packet:
+                packet.settimeout(3)
+                packet.sendto(b'public-udp-query', ('127.0.0.1', udp_port))
+                assert packet.recv(4096) == b'public-udp-response'
         before = {key: value for key, value in query(stats_port).items() if ':b>>>' in key}
         assert sum(before.values()) > 40000
         for key in ('stats-ip', 'stats-host'):
@@ -279,7 +296,7 @@ def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, cer
         after = query(stats_port)
         assert all(after[key] >= value for key, value in before.items())
         assert hits == ['/public', '/public', '/public', '/public']
-        assert packet_hits == [b'public-udp-query']
+        assert packet_hits == ([] if protocol=='shadowtls' else [b'public-udp-query'])
         assert rebind_answers == ['198.51.100.9', '127.0.0.1']
     finally:
         for process in reversed(processes):
@@ -288,6 +305,7 @@ def test_real_customer_cannot_read_reset_or_dial_internal_services(tmp_path, cer
             process.wait(timeout=5)
         for logfile in logs:
             logfile.close()
+        if handshake:handshake.shutdown();handshake.server_close()
         target.shutdown()
         target.server_close()
         thread.join(timeout=2)

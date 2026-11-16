@@ -65,3 +65,14 @@ or another user's credential. See [protocol configuration](protocols.md).
 The SS/Trojan matrix is verified with real sing-box TCP and UDP traffic for two
 users, including exact payload byte totals and quota removal. INI and URI output
 is validated against documented syntax, not every installed client version.
+
+## TUIC / ShadowTLS v3
+
+TUIC v5 is exported to all five formats, with UUID/password, verified TLS SNI
+and h3 ALPN. sing-box and Mihomo also preserve congestion and UDP relay settings.
+ShadowTLS composites are one visible SS node with a private detour in sing-box,
+a shadow-tls SS plugin in Mihomo, and v3 wrapper options in Surge. Shadowrocket
+links carry a Base64 JSON `shadow-tls` parameter. Surfboard omits these composites
+rather than exporting unusable unwrapped SS entries. ShadowTLS supports TCP only.
+The share page copies the complete two-outbound graph; hidden detours never
+appear in selectors or increment the visible node count. See [protocols](protocols.md).
