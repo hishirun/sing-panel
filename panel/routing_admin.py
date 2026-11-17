@@ -47,7 +47,10 @@ def install(app,m):
         from .latency import cached
         for out in data['outbounds']:out['latency']=cached(m.DB,out)
         labels={'direct':'服务器直连','reject':'拦截',**{o['id']:o['name'] for o in data['outbounds']}}
-        return m.render(request,'routing.html',routing=data,targets=labels,types=r.TYPES,nodes=records(m.DB,'nodes'),error=error,notice=notice)
+        from .personal_outbounds import rows
+        personal=rows(m.DB);users={row['id']:row['name'] for row in records(m.DB,'users')}
+        for out in personal:out.update(owner_name=users.get(out['user_id'],'用户已删除'),latency=cached(m.DB,out))
+        return m.render(request,'routing.html',personal_outbounds=personal,routing=data,targets=labels,types=r.TYPES,nodes=records(m.DB,'nodes'),error=error,notice=notice)
     def outbound_form(request,row=None,values=None,error='',public=None):
         users=records(m.DB,'users')
         return m.render(request,'routing_outbound.html',row=row,values=values or r.edit_values(row),public=public or public_values(row),users=users,groups=sorted({u['group_name'] for u in users if u.get('group_name')}),types=r.TYPES,methods=r.SS_METHODS,error=error)
@@ -210,6 +213,39 @@ def install(app,m):
             await run_in_threadpool(apply_change,request,str(raw.get('token','')),change,'保存分流出口',name,expected)
             return RedirectResponse('/routing',303)
         except (ValueError,TypeError) as e:return outbound_form(request,old,dict(raw),str(e),public=public_values(old,raw))
+
+    @app.get('/routing/personal/{identity}')
+    def personal_detail(request:Request,identity:str):
+        m.authenticated(request)
+        from .personal_outbounds import rows,projection
+        row=find(rows(m.DB),identity)
+        owner=find(records(m.DB,'users'),row['user_id'])
+        return m.render(request,'personal_outbound_admin.html',entry=row,owner=owner,values=projection(row),
+            secret_config=json.dumps(row['settings'],ensure_ascii=False,indent=2),methods=r.SS_METHODS)
+
+    @app.post('/routing/personal/{identity}')
+    async def personal_update(request:Request,identity:str):
+        raw=await form(request)
+        from .personal_outbounds import rows,mutate
+        row=find(rows(m.DB),identity)
+        values=dict(raw)
+        try:values['revision']=int(values.get('revision',''))
+        except ValueError:raise HTTPException(422,'页面版本无效')
+        action=str(raw.get('intent','save'))
+        if action not in ('save','toggle','delete'):raise HTTPException(404)
+        try:
+            await run_in_threadpool(mutate,m,row['user_id'],identity,values,lambda:authorize(request,str(raw.get('token',''))),action)
+            return RedirectResponse('/routing',303)
+        except ValueError as error:raise HTTPException(422,str(error))
+
+    @app.post('/routing/personal/{identity}/latency')
+    async def personal_latency(request:Request,identity:str):
+        await form(request)
+        from .personal_outbounds import rows
+        entry=find(rows(m.DB),identity)
+        from .latency import probe
+        if not entry['enabled']:raise HTTPException(422,'出口已停用')
+        return await run_in_threadpool(probe,m.DB,m.runtime,entry)
 
     @app.get('/routing/outbounds/{identity}/{action}')
     def outbound_action_link(request:Request,identity:str,action:str):

@@ -52,3 +52,19 @@ class LoopbackFixtureRuntime(Runtime):
         # Other tests and later Runtime instances still use protected configs.
         with patch('panel.runtime.current_config', side_effect=fixture_config):
             return super().apply()
+
+
+def statistics_port(path):
+    """Both control ports must be free and distinct from not-yet-bound grants."""
+    import socket
+    from panel.core import connect
+    with connect(path) as db:
+        reserved={row[0] for row in db.execute('SELECT port FROM nodes UNION SELECT port FROM memberships')}
+    for _ in range(100):
+        with socket.socket() as stats,socket.socket() as control:
+            stats.bind(('127.0.0.1',0));number=stats.getsockname()[1]
+            if number==65535 or reserved & {number,number+1}:continue
+            try:control.bind(('127.0.0.1',number+1))
+            except OSError:continue
+            return number
+    raise RuntimeError('Could not reserve a statistics/control port pair')

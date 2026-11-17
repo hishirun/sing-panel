@@ -120,6 +120,7 @@ SING_BOX=/absolute/path/to/sing-box .venv/bin/python -m pytest -q
 - **Snell v6**：`default`（加密 + PSK 派生流量整形）、`unshaped`（加密、不整形）、`unsafe-raw`（无加密，需显式风险确认）。支持共享节点 PSK、客户端连接复用和网络类型。v6 的具体流量特征由核心根据 PSK 派生，不存在任意手工特征模板字段。
 - **Snell v5**：HTTP 混淆及客户端 Host；v6 不使用 v5 的混淆选项。
 - **SS / SS2022**：独立端口或 AES 系列共享端口、加密方式、自动密钥、TCP/UDP 网络限制；用户流量与其他节点共享额度。
+- **个人出口**：用户自带 HTTP(S)、SOCKS5、SS/SS2022，所属用户专用；管理员可查看配置、修改和测速。
 - **TUIC v5**：TLS 1.3、拥塞控制、认证超时、心跳、原生 UDP / QUIC 流转发，按用户统计。
 - **ShadowTLS v3**：一键组合 Shadowsocks；独立用户端口、自动认证、无端口后端、只计解密后流量（TCP）。远端需 Agent 0.2.1+。
 - **Trojan**：证书、SNI、TLS 最低版本、ALPN，以及 TCP / WebSocket / gRPC 传输选项。

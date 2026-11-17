@@ -122,7 +122,9 @@ def install(app, m):
             safe['rollout'] = {'revision': 0, 'total': 0, 'confirmed': 0, 'state': 'idle', 'targets': []}
         safe['warnings'] = rule_warnings(safe['draft'], nodes)
         why = reason(user) or ('' if policy['allowed'] else '管理员尚未开启自定义分流')
-        return {'csrf':request.session['csrf'],'share_url':root,'locked':not allowed,
+        from .personal_outbounds import rows,projection,MAXIMUM
+        personal=[projection(row) for row in rows(m.DB,user['id'])] if allowed else []
+        return {'personal_outbounds':personal,'personal_outbound_limit':MAXIMUM,'csrf':request.session['csrf'],'share_url':root,'locked':not allowed,
                 'editable':bool(allowed and not why),'reason':why,
                 'policy':safe,'outbounds':outs,'nodes':nodes,'presets':presets() if allowed else []}
 
@@ -210,13 +212,41 @@ def install(app, m):
         user, policy, _ = identity(request, token, True, True)
         limited(('latency',user['id']), 8, 60)
         from .latency import probe, cached
-        out=next((out for out in routing.load(m.DB)['outbounds'] if out['id']==identity_id and ur.allowed_outbound(out,user,policy)),None)
+        out=next((out for out in ur.combined_outbounds(m.DB,routing.load(m.DB)) if out['id']==identity_id and ur.allowed_outbound(out,user,policy)),None)
         if out is None:
             raise HTTPException(404, '出口不可用或未授权')
         previous=cached(m.DB,out)
         if time.time()-previous.get('checked_at',0)<30:
             return {key:previous[key] for key in ('delay','checked_at') if key in previous}
         return await run_in_threadpool(probe,m.DB,m.runtime,out)
+
+    @app.post('/s/{token}/routing/personal')
+    async def personal_create(request:Request,token:str):
+        return await personal_change(request,token,None,'save')
+
+    @app.post('/s/{token}/routing/personal/{outbound_id}')
+    async def personal_save(request:Request,token:str,outbound_id:str):
+        return await personal_change(request,token,outbound_id,'save')
+
+    @app.post('/s/{token}/routing/personal/{outbound_id}/{action}')
+    async def personal_action(request:Request,token:str,outbound_id:str,action:str):
+        if action not in ('delete','toggle'):raise HTTPException(404)
+        return await personal_change(request,token,outbound_id,action)
+
+    async def personal_change(request,token,outbound_id,action):
+        raw=await body(request)
+        user,policy,_=identity(request,token,True,True)
+        busy(policy);limited(('personal',user['id']),10,60)
+        from .personal_outbounds import mutate,find
+        if outbound_id:
+            try:find(m.DB,user['id'],outbound_id)
+            except ValueError:raise HTTPException(404,'个人出口不存在')
+        def authorize():
+            _,current,_=identity(request,token,True,True)
+            m.csrf(request,str(raw.get('csrf','')));busy(current)
+        try:await run_in_threadpool(mutate,m,user['id'],outbound_id,raw,authorize,action)
+        except ValueError as error:raise HTTPException(422,str(error))
+        return state(request,token)
 
     @app.post('/s/{token}/routing/preview')
     async def preview(request:Request, token:str):

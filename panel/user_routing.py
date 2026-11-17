@@ -102,6 +102,7 @@ def configure_user(path, user_id, allowed, max_rules=6):
 
 
 def _audience(out, user):
+    if out.get('owner_id'):return out['owner_id']==user['id']
     public = out.get('public', {})
     if not isinstance(public, dict) or not public.get('visible', False):
         return False
@@ -122,10 +123,11 @@ def public_outbounds(path, user, settings=None):
     settings = r.load(path) if settings is None else settings
     policy = get_policy(path, user['id'])
     result = []
-    for out in sorted(settings['outbounds'], key=lambda entry: entry.get('public', {}).get('order', 0)):
+    from .personal_outbounds import rows
+    for out in sorted(settings['outbounds']+rows(path,user['id']), key=lambda entry: entry.get('public', {}).get('order', 0)):
         if not _audience(out, user):
             continue
-        public = out['public']
+        public = out.get('public',{'name':out['name']})
         latency = cached(path, out)
         result.append({
             'id': out['id'], 'name': public.get('name') or '出口 ' + out['id'][:6],
@@ -134,7 +136,13 @@ def public_outbounds(path, user, settings=None):
             'selectable': allowed_outbound(out, user, policy),
             'latency': {key: latency[key] for key in ('delay', 'checked_at') if key in latency},
         })
+        if out.get('owner_id'):result[-1]['personal']=True
     return result
+
+
+def combined_outbounds(path,settings):
+    from .personal_outbounds import rows
+    return settings['outbounds']+rows(path)
 
 
 def _bool(value, label):
@@ -167,7 +175,7 @@ def validate_draft(path, user_id, document, settings=None, allow_unavailable=Fal
     if len(document['rules']) > policy['max_rules']:
         raise ValueError('最多可设置 ' + str(policy['max_rules']) + ' 条规则')
     settings = r.load(path) if settings is None else settings
-    permitted = {out['id'] for out in settings['outbounds'] if allowed_outbound(out, user, policy)}
+    permitted = {out['id'] for out in combined_outbounds(path,settings) if allowed_outbound(out, user, policy)}
     retained = {(rule['id'], rule['target']) for doc in (policy['draft'], policy['applied'])
                 for rule in doc.get('rules', [])}
     enabled = _bool(document.get('enabled', True), '分流开关')
@@ -324,7 +332,11 @@ def compose(document, path, settings=None, policy_overrides=None):
     sets = {entry['tag']: entry for entry in result['route'].get('rule_set', [])}
     sets.update({entry['tag']: entry for entry in default_document['route'].get('rule_set', [])})
     own_rules, sniff_scopes, resolve_scopes = [], [], []
-    outbounds = {out['id']: out for out in settings['outbounds']}
+    outbounds = {out['id']: out for out in combined_outbounds(path,settings)}
+    # Only the owner's policy may reference a personal alias. The controller is
+    # private; aliases also allow an owner to test a saved exit before publishing.
+    result['outbounds'].extend({**copy.deepcopy(out['settings']),'tag':'up-'+out['id']} for out in outbounds.values()
+        if out.get('owner_id') in users and allowed_outbound(out,users[out['owner_id']],policies.get(out['owner_id'],{})) and not reason(users[out['owner_id']]))
     for user_id, policy in policies.items():
         user = users.get(user_id)
         if not user or not policy['allowed'] or reason(user):

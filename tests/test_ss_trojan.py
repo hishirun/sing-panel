@@ -8,7 +8,7 @@ from panel.subscriptions import outbounds,native_subscription
 from panel.client_profiles import ini_profile,mihomo_profile,singbox_profile
 from test_app import client,csrf
 from test_tls_protocols import certificate
-from loopback_fixture import LoopbackFixtureRuntime
+from loopback_fixture import LoopbackFixtureRuntime,statistics_port
 from traffic_audit import receive,socks
 from test_integration import port
 
@@ -39,7 +39,7 @@ def test_real_tcp_udp_exact_accounting_and_user_isolation(tmp_path,certificate,p
         with connect(path) as db:
             node=records(path,'nodes')[0];o=json.loads(node['options']);o.update(handshake_host='127.0.0.1',handshake_port=handshake.server_port)
             db.execute('UPDATE nodes SET options=?',(json.dumps(o),))
-    rt=LoopbackFixtureRuntime(os.environ['SING_BOX'],tmp_path,port());process=None
+    rt=LoopbackFixtureRuntime(os.environ['SING_BOX'],tmp_path,statistics_port(path));process=None
     try:
         rt.apply()
         for uid in ('alice','bob'):

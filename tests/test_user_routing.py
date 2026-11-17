@@ -6,7 +6,7 @@ import pytest
 from panel.core import connect, init_db, current_config, records, set_memberships, config
 from panel import routing as r
 from panel import user_routing as ur
-from loopback_fixture import LoopbackFixtureRuntime, unprotected_fixture
+from loopback_fixture import LoopbackFixtureRuntime, unprotected_fixture,statistics_port
 
 @pytest.fixture
 def policy_db(tmp_path):
@@ -343,7 +343,7 @@ def test_real_two_users_choose_different_exits_tcp_and_udp(tmp_path, protocol, m
         for i, uid in enumerate(('alice', 'bob')):
             ur.configure_user(path, uid, True)
             publish_for_test(path, uid, draft('exit'+str(i), kind='ip_cidr', values=['127.0.0.1/32']))
-        rt = LoopbackFixtureRuntime(binary, tmp_path, port());rt.apply()
+        rt = LoopbackFixtureRuntime(binary, tmp_path, statistics_port(path));rt.apply()
         clients = []
         for user in records(path, 'users'):
             outs = outbounds(user, records(path, 'nodes'), records(path, 'memberships'), '127.0.0.1')

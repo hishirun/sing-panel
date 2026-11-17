@@ -22,3 +22,5 @@ body.admin-shell{--bg:#f7f7f6;--surface:#fff;--input:#f7f8f9;--text:#292d33;--mu
 .admin-shell .protocol-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:24px 0}.admin-shell .protocol-choice{min-height:78px;display:flex;flex-direction:column;justify-content:center;gap:8px}.admin-shell .protocol-choice small{line-height:1.5;overflow-wrap:anywhere}@media(max-width:1000px){.admin-shell .protocol-picker{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .admin-shell .protocol-note{margin-top:20px;padding:18px 20px;border-radius:16px;background:var(--soft);border:1px solid var(--border)}.admin-shell .protocol-note p{margin-bottom:0}
+
+.personal-secret-config{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;border-radius:16px;background:var(--soft);font-size:12px}

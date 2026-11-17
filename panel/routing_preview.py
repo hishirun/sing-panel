@@ -32,7 +32,7 @@ def preview(m, user, policy, destination, node_id, mode='draft'):
     if reason(user):
         raise ValueError('当前账户不可用，不能推演新连接')
     public={out['id']:out for out in user_routing.public_outbounds(m.DB,user,settings)}
-    permitted={out['id'] for out in settings['outbounds'] if user_routing.allowed_outbound(out,user,policy)}
+    permitted={out['id'] for out in user_routing.combined_outbounds(m.DB,settings) if user_routing.allowed_outbound(out,user,policy)}
     cache={}
     checks=0
     deadline=time.monotonic()+8

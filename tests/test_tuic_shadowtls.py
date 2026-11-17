@@ -142,7 +142,7 @@ def test_remote_shadowtls_requires_current_agent_and_preserves_server_scope(clie
 def test_real_mixed_layer_credentials_cannot_cross_users(tmp_path,certificate,layer):
     import ssl,threading,time
     from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
-    from loopback_fixture import LoopbackFixtureRuntime
+    from loopback_fixture import LoopbackFixtureRuntime,statistics_port
     from traffic_audit import receive
     from test_integration import port
     hits=[]
@@ -161,7 +161,7 @@ def test_real_mixed_layer_credentials_cannot_cross_users(tmp_path,certificate,la
     with connect(path) as db:
         o=json.loads(records(path,'nodes')[0]['options']);o.update(handshake_host='127.0.0.1',handshake_port=handshake.server_port)
         db.execute('UPDATE nodes SET options=?',(json.dumps(o),))
-    rt=LoopbackFixtureRuntime(os.environ['SING_BOX'],tmp_path,port());process=None
+    rt=LoopbackFixtureRuntime(os.environ['SING_BOX'],tmp_path,statistics_port(path));process=None
     try:
         rt.apply();alice,bob=records(path,'users');node=records(path,'nodes')[0]
         out=outbounds(alice,[node],records(path,'memberships'),'127.0.0.1')[0]

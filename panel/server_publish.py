@@ -30,6 +30,7 @@ def input_signature(path,sid):
             if row['id'] not in owned_users:continue
             users.append({k:row[k] for k in ('id','secret','uuid','group_name')}|{'inactive':reason(row)})
         policies=[tuple(r) for r in db.execute('SELECT user_id,allowed,applied,applied_revision FROM user_routing ORDER BY user_id') if r['user_id'] in owned_users]
+        personal=[tuple(r) for r in db.execute('SELECT * FROM personal_outbounds ORDER BY id') if r['user_id'] in owned_users]
         routing=db.execute("SELECT value FROM settings WHERE key='server_routing'").fetchone()
         server=db.execute('SELECT enabled,desired_state FROM servers WHERE id=?',(sid,)).fetchone()
     certificates=[]
@@ -40,7 +41,7 @@ def input_signature(path,sid):
                 try:
                     stat=Path(options[key]).stat();certificates.append((options[key],stat.st_mtime_ns,stat.st_ctime_ns,stat.st_size))
                 except OSError:certificates.append((options[key],'unavailable'))
-    payload=[nodes,members,users,policies,list(routing) if routing else [],list(server) if server else [],certificates]
+    payload=[nodes,members,users,policies,personal,list(routing) if routing else [],list(server) if server else [],certificates]
     return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 

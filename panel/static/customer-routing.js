@@ -80,7 +80,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
           if (window.customerAuthRedirect?.(fresh)) throw new DOMException('登录状态已失效', 'AbortError');
           if (fresh.ok) {
             const next = await fresh.json();
-            if (!next.policy.allowed) { clearTimeout(saveTimer); await closeEditor(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; }
+            if (!next.policy.allowed) { clearTimeout(saveTimer); await closeEditor(true); await closePersonal(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; }
             acceptState(next, !!next.policy.allowed && generation !== savedGeneration);
           }
         } catch (_) {}
@@ -91,7 +91,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
     return data;
   }
   function acceptState(next, keepDraft = false) {
-    const structuralChange = JSON.stringify([state.nodes, state.outbounds, state.presets, state.editable, state.locked, state.policy.max_rules, state.policy.warnings, busy()]) !== JSON.stringify([next.nodes, next.outbounds, next.presets, next.editable, next.locked, next.policy.max_rules, next.policy.warnings, ['queued', 'applying'].includes(next.policy.status)]);
+    const structuralChange = JSON.stringify([state.nodes, state.outbounds, state.personal_outbounds, state.presets, state.editable, state.locked, state.policy.max_rules, state.policy.warnings, busy()]) !== JSON.stringify([next.nodes, next.outbounds, next.personal_outbounds, next.presets, next.editable, next.locked, next.policy.max_rules, next.policy.warnings, ['queued', 'applying'].includes(next.policy.status)]);
     const draftChange = !keepDraft && !sameDocument(draft, next.policy.draft);
     state = next;
     if (draftChange) draft = copy(next.policy.draft || {enabled:true, rules:[]});
@@ -114,7 +114,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
       const next = await api('/api', null, 'GET');
       if (disposed || saving || actionPending || requestedRevision !== state.policy.revision || requestedGeneration !== generation) return;
       if (!next.policy.allowed) {
-        clearTimeout(saveTimer); await closeEditor(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; acceptState(next);
+        clearTimeout(saveTimer); await closeEditor(true); await closePersonal(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; acceptState(next);
       } else if (next.policy.revision !== requestedRevision && (unsaved() || editor.open)) {
         clearTimeout(saveTimer); conflictState = next; saveError = '另一页面更新了草稿，请先载入最新版本。'; renderStatus();
       } else {
@@ -267,7 +267,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
       row.addEventListener('drop', event => { event.preventDefault(); if (!dragged || dragged === rule.id) return; const source = dragged; dragged = null; mutate(() => { const from = draft.rules.findIndex(item => item.id === source), to = draft.rules.findIndex(item => item.id === rule.id); if (from < 0 || to < 0) return; const [moving] = draft.rules.splice(from, 1); draft.rules.splice(to, 0, moving); }); });
       handle.addEventListener('dragend', () => { dragged = null; root.querySelectorAll('.is-dragging,.is-drop-target').forEach(node => node.classList.remove('is-dragging', 'is-drop-target')); });
     }
-    renderOutbounds(); renderPreviewNode();
+    renderOutbounds(); renderPersonalOutbounds(); renderPreviewNode();
     $('routing-preview-form').querySelector('button[type=submit]').disabled = state.locked || !state.policy.allowed || !(state.nodes || []).length;
     if (focusId && focusAction) list.querySelector('[data-rule-id="' + CSS.escape(focusId) + '"] ' + focusAction)?.focus({preventScroll: true});
   }
@@ -316,7 +316,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
   }
   function renderOutbounds() {
     const container = $('routing-egresses'); container.replaceChildren();
-    const outs = state.outbounds || [];
+    const outs = (state.outbounds || []).filter(out=>!out.personal);
     $('routing-egress-count').textContent = state.locked ? '' : outs.filter(out => out.usable).length + ' 个可用';
     if (!outs.length) { container.append(el('p', 'routing-footnote', state.locked ? '管理员开启自定义分流后，可查看已授权出口。' : '管理员尚未授权出口。')); return; }
     for (const out of outs) {
@@ -327,12 +327,89 @@ window.panelPageScripts.register(document.currentScript.src, () => {
       const latency = el('div', 'routing-egress-latency');
       const test = button(out.delay != null ? out.delay + ' ms' : out.checked_at ? '重新检测' : '测试延迟', '', async () => {
         test.disabled = true; test.textContent = '检测中…';
-        try { const result = await api('/latency/' + encodeURIComponent(out.id), {}); out.delay = result.delay; out.checked_at = result.checked_at || result.timestamp || Date.now() / 1000; renderOutbounds(); window.panelToast(result.delay == null ? '出口不可达或检测超时' : out.name + ' · ' + result.delay + ' ms', result.delay == null); }
+        try { const result = await api('/latency/' + encodeURIComponent(out.id), {}); out.delay = result.delay; out.checked_at = result.checked_at || result.timestamp || Date.now() / 1000; renderOutbounds(); renderPersonalOutbounds(); window.panelToast(result.delay == null ? '出口不可达或检测超时' : out.name + ' · ' + result.delay + ' ms', result.delay == null); }
         catch (error) { test.disabled = false; test.textContent = '重新检测'; if (!disposed) window.panelToast(error.message, true); }
       }, !state.editable || !out.usable); test.setAttribute('aria-label', '测试 ' + out.name + ' 出口延迟');
       latency.append(test, el('small', '', (out.delay == null && out.checked_at ? '未连通 · ' : '') + formatTime(out.checked_at))); row.append(info, latency); container.append(row);
     }
   }
+  let personalEditing=null, personalMethodPicker=null, personalDirty=false;
+  const personalDialog=$('personal-egress-editor'),personalForm=$('personal-egress-form');
+  const personalField=name=>personalForm.elements.namedItem(name);
+  function refreshPersonalFields(){
+    const kind=personalField('type').value;
+    root.querySelectorAll('[data-personal-kind]').forEach(node=>node.setAttribute('aria-pressed',String(node.dataset.personalKind===kind)));
+    for(const [selector,show] of [['[data-personal-auth]',kind!=='shadowsocks'],['[data-personal-ss]',kind==='shadowsocks'],['[data-personal-http]',kind==='http'],['[data-personal-sni]',kind==='http'&&personalField('use_tls').checked]]){
+      personalForm.querySelectorAll(selector).forEach(node=>{node.hidden=!show;node.querySelectorAll('input').forEach(input=>input.disabled=!show);});
+    }
+    personalField('password').required=kind==='shadowsocks'&&!personalEditing?.has_password;
+  }
+  function renderPersonalOutbounds(){
+    const items=state.personal_outbounds||[],container=$('personal-egress-list');container.replaceChildren();
+    $('personal-egress-count').textContent=items.length+' / '+(state.personal_outbound_limit||10);
+    $('personal-egress-add').disabled=!canEdit()||items.length>=(state.personal_outbound_limit||10);
+    if(!items.length){const empty=el('div','personal-egress-empty');empty.append(el('strong','','添加你自己的代理出口'),el('p','','HTTP(S)、SOCKS5、Shadowsocks，可用于上方分流规则。'));container.append(empty);return;}
+    for(const item of items){
+      const row=el('article','personal-egress-row'),info=el('div','personal-egress-description');
+      info.append(el('strong','',item.name),el('span','personal-egress-badge',item.enabled?'个人专用':'已停用'),el('p','',[protocolName(item.type),item.server+':'+item.server_port].join(' · ')));
+      const actions=el('div','personal-egress-actions');
+      actions.append(button('编辑','',()=>openPersonal(item),!canEdit()));
+      const out=(state.outbounds||[]).find(out=>out.id===item.id);
+      const test=button(out?.delay!=null?out.delay+' ms':'测速','',async()=>{
+        test.disabled=true;test.textContent='检测中…';
+        try{const result=await api('/latency/'+encodeURIComponent(item.id),{});if(out){out.delay=result.delay;out.checked_at=result.checked_at;}renderPersonalOutbounds();window.panelToast(result.delay==null?'出口不可达或检测超时':item.name+' · '+result.delay+' ms',result.delay==null);}
+        catch(error){test.disabled=false;test.textContent='重测';window.panelToast(error.message,true);}
+      },!canEdit()||!item.enabled);actions.append(test);
+      actions.append(button(item.enabled?'停用':'启用','',()=>changePersonal(item,'toggle'),!canEdit()));
+      const remove=button('删除','personal-egress-delete',()=>changePersonal(item,'delete'),!canEdit());remove.setAttribute('aria-label','删除个人出口 '+item.name);actions.append(remove);
+      row.append(info,actions);container.append(row);
+    }
+  }
+  function openPersonal(item=null){
+    if(!canEdit())return;
+    personalEditing=item;personalForm.reset();personalDirty=false;
+    const defaults={name:'',type:'socks',server:'',server_port:1080,username:'',method:'chacha20-ietf-poly1305',sni:''};
+    for(const [name,value] of Object.entries({...defaults,...item})){
+      const field=personalForm.elements.namedItem(name);if(field&&field.type!=='password'&&field.type!=='checkbox')field.value=String(value??'');
+    }
+    personalField('use_tls').checked=item?.tls_mode==='tls';personalField('clear_password').checked=false;
+    personalField('password').value='';personalField('password').placeholder=item?.has_password?'留空保留已有密码':'无认证可留空';
+    personalForm.querySelector('.personal-auth-clear').style.display=item?'':'none';
+    $('personal-egress-editor-title').textContent=item?'编辑个人出口':'添加个人出口';$('personal-egress-error').hidden=true;
+    personalMethodPicker?.destroy();
+    const methods=['aes-128-gcm','aes-256-gcm','chacha20-ietf-poly1305','2022-blake3-aes-128-gcm','2022-blake3-aes-256-gcm','2022-blake3-chacha20-poly1305','xchacha20-ietf-poly1305'].map(value=>({value,label:value}));
+    personalMethodPicker=new Picker($('personal-method-picker'),{label:'SS 加密方式',selected:()=>[personalField('method').value],source:localSource(methods),onSelect:option=>{personalField('method').value=option.value;personalDirty=true;personalMethodPicker.setCaption(option.label);}});
+    personalMethodPicker.setCaption(personalField('method').value);refreshPersonalFields();personalDialog.showModal();personalField('name').focus();
+  }
+  async function closePersonal(force=false){
+    if(!personalDialog.open)return true;
+    if(actionPending&&!force)return false;
+    if(personalDirty&&!force&&!(await window.panelConfirm('放弃未保存的个人出口更改？','放弃更改')))return false;
+    personalDialog.close();personalMethodPicker?.destroy();personalDirty=false;personalField('password').value='';return true;
+  }
+  async function changePersonal(item,action){
+    if(!canEdit())return;
+    const prompt=action==='delete'?'确认删除「'+item.name+'」？已引用的出口需先调整规则。':item.enabled?'停用后，引用此出口的已发布规则将拦截连接。继续？':null;
+    if(prompt&&!(await window.panelConfirm(prompt,action==='delete'?'删除个人出口':'停用个人出口')))return;
+    try{await flushDraft();actionPending=true;render();const next=await api('/personal/'+encodeURIComponent(item.id)+'/'+action,{revision:item.revision});acceptState(next);window.panelToast(action==='delete'?'个人出口已删除':'个人出口状态已更新');}
+    catch(error){if(!disposed)window.panelToast(error.message,true);}
+    finally{actionPending=false;if(!disposed)render();}
+  }
+  listen($('personal-egress-add'),'click',()=>openPersonal());
+  for(const id of ['personal-egress-close','personal-egress-cancel'])listen($(id),'click',()=>closePersonal());
+  listen(personalDialog,'cancel',event=>{event.preventDefault();closePersonal();});
+  listen(personalForm,'input',()=>{personalDirty=true;});
+  listen(personalForm,'change',()=>{personalDirty=true;refreshPersonalFields();});
+  root.querySelectorAll('[data-personal-kind]').forEach(node=>listen(node,'click',()=>{personalField('type').value=node.dataset.personalKind;personalDirty=true;refreshPersonalFields();}));
+  listen(personalForm,'submit',async event=>{
+    event.preventDefault();if(!canEdit())return;
+    const values=Object.fromEntries(new FormData(personalForm));values.tls_mode=personalField('type').value==='http'&&personalField('use_tls').checked?'tls':'none';values.clear_password=personalField('clear_password').checked;
+    if(personalEditing)values.revision=personalEditing.revision;
+    const submit=event.submitter;submit.disabled=true;$('personal-egress-error').hidden=true;
+    try{await flushDraft();actionPending=true;render();const next=await api('/personal'+(personalEditing?'/'+encodeURIComponent(personalEditing.id):''),values);await closePersonal(true);acceptState(next);window.panelToast('个人出口已保存，可在规则中选择');}
+    catch(error){if(!disposed){$('personal-egress-error').textContent=error.message;$('personal-egress-error').hidden=false;}}
+    finally{actionPending=false;if(!disposed){submit.disabled=false;render();}}
+  });
   // One searchable chooser supports local destinations and paginated Geo catalogs.
   class Picker {
     constructor(container, {label, placeholder, multiple = false, selected, source, onSelect}) {
@@ -485,7 +562,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
   }
   function buildTargetPicker() {
     targetPicker?.destroy();
-    const choicesNow = () => [...(state.outbounds || []).map(out => ({value:out.id, label:out.name, detail:[out.region, protocolName(out.type), !out.usable ? '不可选择' : out.delay != null ? out.delay + ' ms · 主控参考' : ''].filter(Boolean).join(' · '), disabled:!out.usable})), {value:'reject', label:'拦截连接', detail:'不发送流量'}];
+    const choicesNow = () => [...(state.outbounds || []).map(out => ({value:out.id, label:out.name, detail:[out.personal ? '个人出口' : out.region, protocolName(out.type), !out.usable ? '不可选择' : out.delay != null ? out.delay + ' ms · 主控参考' : ''].filter(Boolean).join(' · '), disabled:!out.usable})), {value:'reject', label:'拦截连接', detail:'不发送流量'}];
     const choices = choicesNow();
     targetPicker = new Picker($('routing-target-picker'), {label:'使用出口', selected:() => [editorRule.target], source:(query, offset) => localSource(choicesNow())(query, offset), onSelect:item => { editorRule.target = item.value; editorChanged = true; targetPicker.setCaption(item.label); renderTargetHint(); }});
     targetPicker.setCaption(choices.find(item => item.value === editorRule.target)?.label || (editorRule.target ? '原出口已不可用，请重新选择' : '选择一个已授权出口'));
@@ -687,17 +764,18 @@ window.panelPageScripts.register(document.currentScript.src, () => {
   listen(document, 'click', event => { if (!event.target.closest('.routing-rule-menu,.routing-more-button')) closeMenus(); });
   listen(document, 'keydown', event => { if (event.key === 'Escape') closeMenus(true); });
   const canLeave = async () => {
-    if (!(await closeEditor())) return false;
+    if (!(await closeEditor()) || !(await closePersonal())) return false;
     try { await flushDraft(); return true; }
     catch (_) { return window.panelConfirm('草稿尚未保存，离开后将丢失本地更改。', '离开页面'); }
   };
   window.customerCanLeave = canLeave;
-  listen(window, 'beforeunload', event => { if (editorChanged || generation !== savedGeneration) { event.preventDefault(); event.returnValue = ''; } });
+  listen(window, 'beforeunload', event => { if (editorChanged || personalDirty || generation !== savedGeneration) { event.preventDefault(); event.returnValue = ''; } });
   scope.addEventListener('abort', () => {
     disposed = true; clearTimeout(saveTimer); clearTimeout(pollTimer); valuePicker?.destroy(); targetPicker?.destroy(); previewPicker?.destroy();
     if (window.customerCanLeave === canLeave) delete window.customerCanLeave;
     document.body.classList.remove('routing-has-savebar');
     if (editor.open) editor.close();
+    if(personalDialog.open)personalDialog.close();personalMethodPicker?.destroy();
   }, {once: true});
   listen(document, 'visibilitychange', () => schedulePoll(!document.hidden));
   render(); schedulePoll();

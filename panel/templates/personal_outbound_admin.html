@@ -1,0 +1,15 @@
+{% extends 'base.html' %}{% block content %}
+<header><div><h1>个人出口 · {{ entry.name }}</h1><p class="muted">所属用户：{{ owner.name }} · 管理员可查看、修改和调试</p></div><a class="button" href="{{ admin_path }}/routing">返回分流管理</a></header>
+<form method="post" action="{{ admin_path }}/routing/personal/{{ entry.id }}" data-personal-admin-form>
+<input type="hidden" name="token" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ entry.revision }}">
+<div class="grid"><section><h2>连接配置</h2><div class="formgrid">
+<label>出口名称<input name="name" value="{{ entry.name }}" maxlength="80" required></label><label>协议<select name="type">{% for kind,label in [('http','HTTP / HTTPS'),('socks','SOCKS5'),('shadowsocks','Shadowsocks / SS2022')] %}<option value="{{ kind }}" {{ 'selected' if values.type==kind else '' }}>{{ label }}</option>{% endfor %}</select></label>
+<label>服务器地址<input name="server" value="{{ values.server }}" required></label><label>服务器端口<input name="server_port" type="number" min="1" max="65535" value="{{ values.server_port }}" required></label>
+<label data-personal-auth>用户名<input name="username" value="{{ values.username }}" maxlength="255" autocomplete="off"></label><label>密码 / 密钥<input name="password" type="password" autocomplete="new-password" placeholder="留空保留已有密码"></label>
+<label data-personal-ss>加密方式<select name="method">{% for method in methods %}<option {{ 'selected' if values.method==method else '' }}>{{ method }}</option>{% endfor %}</select></label>
+<label data-personal-http>HTTP 安全模式<select name="tls_mode"><option value="none" {{ 'selected' if values.tls_mode=='none' else '' }}>HTTP</option><option value="tls" {{ 'selected' if values.tls_mode=='tls' else '' }}>HTTPS · 验证证书</option></select></label><label data-personal-http>SNI<input name="sni" value="{{ values.sni }}" placeholder="留空跟随服务器域名"></label>
+<label class="check" data-personal-auth><input name="clear_password" type="checkbox" value="1">清除用户名和密码</label>
+</div><div class="actions"><button class="primary" name="intent" value="save">保存配置</button><button name="intent" value="toggle" formnovalidate>{{ '停用出口' if entry.enabled else '启用出口' }}</button><button class="danger" name="intent" value="delete" formnovalidate data-confirm="确认删除此个人出口？">删除出口</button></div></section>
+<aside><section><h2>管理员调试</h2><p class="muted">连接 IP：{{ entry.settings.server }} · 仅管理员和所属用户可管理</p><button type="button" data-latency="{{ admin_path }}/routing/personal/{{ entry.id }}/latency" data-token="{{ csrf }}" {{ 'disabled' if not entry.enabled else '' }}>测试出口延迟</button><details><summary>查看完整连接配置（含密码）</summary><pre class="personal-secret-config"><code>{{ secret_config }}</code></pre><button type="button" data-copy="{{ secret_config }}">复制配置</button></details></section></aside></div></form>
+<script src="{{ asset_url('personal-admin.js') }}" defer></script><script src="{{ asset_url('latency.js') }}" defer></script><script src="{{ asset_url('sharing.js') }}" defer></script>
+{% endblock %}
