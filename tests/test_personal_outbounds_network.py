@@ -99,3 +99,47 @@ def test_real_private_exits_tcp_udp_and_user_isolation(tmp_path,kind,method):
         for server in targets:server.shutdown();server.server_close()
         for worker in workers:worker.join(timeout=1)
         for log in logs:log.close()
+
+
+@pytest.mark.skipif(not os.environ.get('SING_BOX'),reason='SING_BOX required')
+def test_real_core_validates_batch_imported_and_roundtripped_personal_exits(tmp_path):
+    from types import SimpleNamespace
+    from urllib.parse import quote
+    binary=os.environ['SING_BOX']
+    path=tmp_path/'panel.db';init_db(path)
+    with connect(path) as db:
+        db.execute("INSERT INTO nodes(id,name,protocol,port,secret,mode) VALUES('node','Fixture','snell6',31001,'node-fixture-secret','shared')")
+        db.execute('INSERT INTO users(id,name,secret,uuid,token) VALUES(?,?,?,?,?)',('alice','Alice','fixture-secret',str(uuid.uuid4()),'fixture-token'))
+        set_memberships(db,'alice',['node'])
+    ur.configure_user(path,'alice',True)
+    def check_document(document):
+        cfg=tmp_path/'check.json';cfg.write_text(json.dumps(document))
+        res=subprocess.run([binary,'check','-c',str(cfg)],capture_output=True,text=True,timeout=10)
+        if res.returncode!=0:raise ValueError(res.stderr)
+    applied=[]
+    fake_m=SimpleNamespace(
+        DB=path,DIRECTORY=tmp_path,BINARY=binary,STATS_PORT=19090,PUBLIC_HOST='198.51.100.10',
+        check_document=check_document,
+        runtime=SimpleNamespace(lock=threading.RLock(),apply=lambda:applied.append(current_config(path,19090))),
+    )
+    k128=new_key('2022-blake3-aes-128-gcm')
+    k256=new_key('2022-blake3-aes-256-gcm')+':'+new_key('2022-blake3-aes-256-gcm')
+    uris='\n'.join([
+        f"http://{quote('u:@1',safe='')}:{quote('p/#?%2',safe='')}@1.1.1.1:8080#{quote('HTTP 出口',safe='')}",
+        f"https://tls-u:{quote('tls-p',safe='')}@[2606:4700:4700::1111]:8443?sni=cloudflare-dns.com#{quote('HTTPS IPv6',safe='')}",
+        f"socks5://sk-u:{quote('sk:p@ss',safe='')}@[2001:4860:4860::8888]:1080#{quote('SOCKS5 IPv6',safe='')}",
+        f"ss://2022-blake3-aes-128-gcm:{quote(k128,safe='')}@8.8.8.8:8388#{quote('SS2022-128',safe='')}",
+        f"ss://2022-blake3-aes-256-gcm:{quote(k256,safe='')}@[2606:4700:4700::1001]:8389#{quote('SS2022-256',safe='')}",
+    ])
+    res=personal.import_batch(fake_m,'alice',uris,lambda:None)
+    assert res['imported_count']==5 and len(applied)==1
+    # Reference one imported exit in applied routing and validate full compiled config with real sing-box check
+    policy={'enabled':True,'rules':[{'id':'r1','name':'UsePersonal','enabled':True,'kind':'domain_suffix','values':['example.com'],'target':res['ids'][1],'node_ids':[]}]}
+    with connect(path) as db:db.execute('UPDATE user_routing SET draft=?,applied=? WHERE user_id=?',(json.dumps(policy),json.dumps(policy),'alice'))
+    check_document(current_config(path,19090))
+    json_blob,_,_=personal.export_personal(path,'alice',None,'json')
+    with connect(path) as db:
+        db.execute("UPDATE user_routing SET draft='{\"enabled\":true,\"rules\":[]}',applied='{\"enabled\":false,\"rules\":[]}' WHERE user_id='alice'")
+        db.execute("DELETE FROM personal_outbounds WHERE user_id='alice'")
+    res2=personal.import_batch(fake_m,'alice',json_blob,lambda:None)
+    assert res2['imported_count']==5 and len(applied)==2

@@ -20,7 +20,18 @@
   <section id="routing-rollout" class="routing-rollout" hidden aria-labelledby="routing-rollout-title">
     <div class="routing-section-heading"><div><h2 id="routing-rollout-title">发布状态</h2><p id="routing-rollout-caption" class="routing-section-caption"></p></div><span id="routing-rollout-count" class="routing-badge"></span></div><div id="routing-rollout-targets" class="routing-rollout-targets"></div>
   </section>
-  <section class="routing-personal-section" aria-labelledby="personal-egress-title"><div class="routing-section-heading"><div><h2 id="personal-egress-title">个人出口</h2><p class="routing-section-caption">仅你可用 · 管理员可查看配置和调试</p></div><div class="routing-toolbar"><span class="routing-small-label" id="personal-egress-count"></span><button type="button" id="personal-egress-add">＋ 添加个人出口</button></div></div><div id="personal-egress-list"></div></section>
+  <section class="routing-personal-section" aria-labelledby="personal-egress-title">
+    <div class="routing-section-heading">
+      <div><h2 id="personal-egress-title">个人出口</h2><p class="routing-section-caption">仅你可用 · 管理员可查看配置和调试</p></div>
+      <div class="routing-toolbar personal-egress-toolbar"><span class="routing-small-label" id="personal-egress-count"></span><button type="button" id="personal-egress-import">批量导入</button><button type="button" id="personal-egress-export">批量导出</button><button type="button" class="primary" id="personal-egress-add">＋ 添加个人出口</button></div>
+    </div>
+    <div id="personal-egress-selection" class="personal-selection-bar" hidden>
+      <label class="personal-select-all"><input type="checkbox" id="personal-select-all"><span>全选</span></label>
+      <span id="personal-selection-summary" class="personal-selection-meta" role="status" aria-live="polite"></span>
+      <button type="button" id="personal-selection-clear" class="routing-text-button" hidden>清空选择</button>
+    </div>
+    <div id="personal-egress-list"></div>
+  </section>
   <div class="routing-lower-grid">
     <section class="routing-egress-section" aria-labelledby="routing-egress-title"><div class="routing-section-heading"><div><h2 id="routing-egress-title">公共出口</h2><p class="routing-section-caption">延迟 · 主控参考</p></div><span class="routing-small-label" id="routing-egress-count"></span></div><div id="routing-egresses"></div></section>
     <section class="routing-preview-section" aria-labelledby="routing-preview-title">
@@ -35,6 +46,37 @@
   </div>
   <div id="routing-savebar" class="routing-savebar" hidden><div><strong id="routing-save-title">有未发布更改</strong><span id="routing-save-caption">等待保存草稿</span></div><div class="routing-save-actions"><button type="button" id="routing-retry" hidden>重试保存</button><button type="button" id="routing-discard">放弃更改</button><button type="button" class="primary" id="routing-apply">发布更改 <span aria-hidden="true">↗</span></button></div></div>
   <dialog id="personal-egress-editor" class="routing-drawer" aria-labelledby="personal-egress-editor-title"><form id="personal-egress-form"><header class="routing-drawer-header"><div><span class="eyebrow">PERSONAL EGRESS</span><h2 id="personal-egress-editor-title">添加个人出口</h2></div><button type="button" id="personal-egress-close" class="routing-close" aria-label="关闭个人出口编辑">×</button></header><div class="routing-drawer-body"><p class="routing-field-hint">个人专用；管理员可查看连接信息以协助调试。</p><input type="hidden" name="type" value="socks"><input type="hidden" name="method" value="chacha20-ietf-poly1305"><div class="routing-kind-buttons personal-kind-buttons" role="group" aria-label="个人出口协议"><button type="button" data-personal-kind="http" aria-pressed="false">HTTP(S)</button><button type="button" data-personal-kind="socks" aria-pressed="true">SOCKS5</button><button type="button" data-personal-kind="shadowsocks" aria-pressed="false">Shadowsocks</button></div><label>出口名称<input name="name" maxlength="80" required placeholder="例如：我的美国出口"></label><div class="personal-form-grid"><label>服务器地址<input name="server" required placeholder="公网 IP 或域名" autocapitalize="none" spellcheck="false"></label><label>端口<input name="server_port" type="number" min="1" max="65535" value="1080" required></label></div><label data-personal-auth>用户名（可选）<input name="username" maxlength="255" autocomplete="off"></label><label>密码 / 密钥<input name="password" type="password" maxlength="4096" autocomplete="new-password" placeholder="无认证可留空"></label><label class="personal-auth-clear" data-personal-auth><input name="clear_password" type="checkbox">清除已有认证</label><div data-personal-ss><label id="personal-method-label">SS 加密方式</label><div id="personal-method-picker"></div></div><div data-personal-http><label class="personal-tls-check"><input name="use_tls" type="checkbox">使用 HTTPS 并验证证书</label><label data-personal-sni>SNI<input name="sni" autocapitalize="none" spellcheck="false" placeholder="留空跟随服务器域名"></label></div><p class="routing-field-hint">域名在保存时解析并固定连接 IP，地址变化后可重新保存。</p><p class="routing-field-error" id="personal-egress-error" role="alert" hidden></p></div><footer class="routing-drawer-footer"><button type="button" id="personal-egress-cancel">取消</button><button type="submit" class="primary">保存个人出口</button></footer></form></dialog>
+  <dialog id="personal-egress-importer" class="routing-drawer" aria-labelledby="personal-import-title">
+    <form id="personal-import-form">
+      <header class="routing-drawer-header"><div><span class="eyebrow">BATCH IMPORT</span><h2 id="personal-import-title">批量导入个人出口</h2></div><button type="button" id="personal-import-close" class="routing-close" aria-label="关闭批量导入">×</button></header>
+      <div class="routing-drawer-body">
+        <p class="routing-field-hint">支持每行一条 HTTP(S)、SOCKS5、SS/SS2022 节点链接，或本面板导出的 JSON 文件。默认跳过完全重复项，不覆盖已有出口。</p>
+        <div class="personal-file-bar">
+          <input id="personal-import-file" type="file" accept=".json,.txt,application/json,text/plain" hidden>
+          <button type="button" id="personal-import-pick">选择文件</button>
+          <span id="personal-import-filename" class="personal-file-name">支持 .json 或 .txt 文本</span>
+          <button type="button" id="personal-import-clear" class="routing-text-button" hidden>清空内容</button>
+        </div>
+        <label for="personal-import-text">节点链接或导出 JSON <span class="routing-optional" id="personal-import-quota"></span></label>
+        <textarea id="personal-import-text" rows="6" spellcheck="false" autocomplete="off" autocapitalize="none" placeholder="socks5://user:pass@203.0.113.10:1080#美国出口&#10;https://user:pass@proxy.example.com:8443#HTTPS 出口&#10;ss://2022-blake3-aes-128-gcm:...#香港出口&#10;或粘贴本面板导出的 JSON"></textarea>
+        <div id="personal-import-preview" class="personal-import-preview" role="region" aria-label="导入预览结果" hidden></div>
+        <p class="routing-field-error" id="personal-import-error" role="alert" hidden></p>
+      </div>
+      <footer class="routing-drawer-footer"><button type="button" id="personal-import-cancel">取消</button><button type="button" id="personal-import-preview-btn">预览解析</button><button type="submit" id="personal-import-submit" class="primary" disabled>确认导入</button></footer>
+    </form>
+  </dialog>
+  <dialog id="personal-egress-exporter" class="routing-drawer" aria-labelledby="personal-export-title">
+    <form id="personal-export-form">
+      <header class="routing-drawer-header"><div><span class="eyebrow">BATCH EXPORT</span><h2 id="personal-export-title">导出个人出口</h2></div><button type="button" id="personal-export-close" class="routing-close" aria-label="关闭批量导出">×</button></header>
+      <div class="routing-drawer-body">
+        <div class="personal-credential-warning" role="note"><strong>导出文件包含连接密码</strong><p>文件中含明文用户名、密码与加密密钥，仅用于本人备份或迁移，请妥善保管。</p></div>
+        <fieldset class="routing-kind-field"><legend><span class="routing-step">01</span> 导出范围</legend><div class="routing-segmented" role="group" aria-label="导出范围"><button type="button" data-export-scope="selected" aria-pressed="false">已勾选出口</button><button type="button" data-export-scope="all" aria-pressed="true">全部个人出口</button></div><p id="personal-export-scope-hint" class="routing-field-hint"></p></fieldset>
+        <fieldset class="routing-kind-field"><legend><span class="routing-step">02</span> 导出格式</legend><div class="routing-kind-buttons"><button type="button" data-export-format="json" aria-pressed="true">版本化 JSON <small>推荐 · 保真回导</small></button><button type="button" data-export-format="uri" aria-pressed="false">节点 URI 文本 <small>每行一条链接</small></button></div><p id="personal-export-format-hint" class="routing-field-hint"></p></fieldset>
+        <p class="routing-field-error" id="personal-export-error" role="alert" hidden></p>
+      </div>
+      <footer class="routing-drawer-footer"><button type="button" id="personal-export-cancel">取消</button><button type="submit" id="personal-export-submit" class="primary">下载导出文件</button></footer>
+    </form>
+  </dialog>
   <dialog id="routing-editor" class="routing-drawer" aria-labelledby="routing-editor-title">
     <form id="routing-rule-form">
       <header class="routing-drawer-header"><div><span class="eyebrow">RULE EDITOR</span><h2 id="routing-editor-title">添加规则</h2></div><button type="button" id="routing-editor-close" class="routing-close" aria-label="关闭规则编辑">×</button></header>

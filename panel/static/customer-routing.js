@@ -80,7 +80,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
           if (window.customerAuthRedirect?.(fresh)) throw new DOMException('登录状态已失效', 'AbortError');
           if (fresh.ok) {
             const next = await fresh.json();
-            if (!next.policy.allowed) { clearTimeout(saveTimer); await closeEditor(true); await closePersonal(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; }
+            if (!next.policy.allowed) { clearTimeout(saveTimer); await closeEditor(true); await closePersonal(true); await closeImport(true); closeExport(true); selectedPersonal.clear(); generation = savedGeneration = 0; conflictState = null; saveError = ''; }
             acceptState(next, !!next.policy.allowed && generation !== savedGeneration);
           }
         } catch (_) {}
@@ -114,7 +114,7 @@ window.panelPageScripts.register(document.currentScript.src, () => {
       const next = await api('/api', null, 'GET');
       if (disposed || saving || actionPending || requestedRevision !== state.policy.revision || requestedGeneration !== generation) return;
       if (!next.policy.allowed) {
-        clearTimeout(saveTimer); await closeEditor(true); await closePersonal(true); generation = savedGeneration = 0; conflictState = null; saveError = ''; acceptState(next);
+        clearTimeout(saveTimer); await closeEditor(true); await closePersonal(true); await closeImport(true); closeExport(true); selectedPersonal.clear(); generation = savedGeneration = 0; conflictState = null; saveError = ''; acceptState(next);
       } else if (next.policy.revision !== requestedRevision && (unsaved() || editor.open)) {
         clearTimeout(saveTimer); conflictState = next; saveError = '另一页面更新了草稿，请先载入最新版本。'; renderStatus();
       } else {
@@ -333,9 +333,16 @@ window.panelPageScripts.register(document.currentScript.src, () => {
       latency.append(test, el('small', '', (out.delay == null && out.checked_at ? '未连通 · ' : '') + formatTime(out.checked_at))); row.append(info, latency); container.append(row);
     }
   }
-  let personalEditing=null, personalMethodPicker=null, personalDirty=false;
+  let personalEditing=null, personalMethodPicker=null, personalDirty=false, personalPrevious=null;
+  const selectedPersonal=new Set();
+  let importPreview=null, importValidatedText='', importDirty=false, importBusy=false, importPrevious=null, importFileSequence=0;
+  let exportScope='all', exportFormat='json', exportBusy=false, exportPrevious=null;
   const personalDialog=$('personal-egress-editor'),personalForm=$('personal-egress-form');
+  const importDialog=$('personal-egress-importer'),importForm=$('personal-import-form'),importText=$('personal-import-text'),importFile=$('personal-import-file');
+  const exportDialog=$('personal-egress-exporter'),exportForm=$('personal-export-form');
   const personalField=name=>personalForm.elements.namedItem(name);
+  const formatEndpoint=(server,port)=>(server.includes(':')?'['+server+']':server)+':'+port;
+  const personalProtocolLabel=item=>item.type==='http'&&item.tls_mode==='tls'?'HTTPS':protocolName(item.type);
   function refreshPersonalFields(){
     const kind=personalField('type').value;
     root.querySelectorAll('[data-personal-kind]').forEach(node=>node.setAttribute('aria-pressed',String(node.dataset.personalKind===kind)));
@@ -345,13 +352,38 @@ window.panelPageScripts.register(document.currentScript.src, () => {
     personalField('password').required=kind==='shadowsocks'&&!personalEditing?.has_password;
   }
   function renderPersonalOutbounds(){
-    const items=state.personal_outbounds||[],container=$('personal-egress-list');container.replaceChildren();
-    $('personal-egress-count').textContent=items.length+' / '+(state.personal_outbound_limit||10);
-    $('personal-egress-add').disabled=!canEdit()||items.length>=(state.personal_outbound_limit||10);
-    if(!items.length){const empty=el('div','personal-egress-empty');empty.append(el('strong','','添加你自己的代理出口'),el('p','','HTTP(S)、SOCKS5、Shadowsocks，可用于上方分流规则。'));container.append(empty);return;}
+    const items=state.personal_outbounds||[],limit=state.personal_outbound_limit||10,container=$('personal-egress-list');
+    const focusedCheck=document.activeElement?.classList.contains('personal-egress-check')?document.activeElement.value:null;
+    const validIds=new Set(items.map(item=>item.id));
+    for(const id of [...selectedPersonal])if(!validIds.has(id))selectedPersonal.delete(id);
+    container.replaceChildren();
+    $('personal-egress-count').textContent=items.length+' / '+limit;
+    $('personal-egress-add').disabled=!canEdit()||items.length>=limit;
+    $('personal-egress-import').disabled=!canEdit()||importBusy;
+    $('personal-egress-export').disabled=!canEdit()||!items.length||exportBusy;
+    const selectionBar=$('personal-egress-selection'),selectAll=$('personal-select-all');
+    selectionBar.hidden=state.locked||!items.length;
+    selectAll.checked=items.length>0&&selectedPersonal.size===items.length;
+    selectAll.indeterminate=selectedPersonal.size>0&&selectedPersonal.size<items.length;
+    selectAll.disabled=!canEdit();
+    $('personal-selection-summary').textContent=selectedPersonal.size?'已选 '+selectedPersonal.size+' / '+items.length+' 个出口':'勾选后可导出指定出口，或直接导出全部';
+    $('personal-selection-clear').hidden=!selectedPersonal.size;
+    $('personal-selection-clear').disabled=!canEdit();
+    if(importDialog.open){
+      $('personal-import-quota').textContent='剩余额度 '+Math.max(0,limit-items.length)+' / '+limit;
+      if(importPreview&&importPreview.existing_count!==items.length)updateImportSubmitState(true);
+    }
+    if(exportDialog.open)refreshExportControls();
+    if(!items.length){const empty=el('div','personal-egress-empty');empty.append(el('strong','','添加你自己的代理出口'),el('p','','支持单个添加或批量导入 HTTP(S)、SOCKS5、SS/SS2022 节点链接与导出文件。'));container.append(empty);return;}
     for(const item of items){
-      const row=el('article','personal-egress-row'),info=el('div','personal-egress-description');
-      info.append(el('strong','',item.name),el('span','personal-egress-badge',item.enabled?'个人专用':'已停用'),el('p','',[protocolName(item.type),item.server+':'+item.server_port].join(' · ')));
+      const checked=selectedPersonal.has(item.id);
+      const row=el('article','personal-egress-row'+(checked?' is-selected':'')),lead=el('div','personal-egress-lead'),info=el('div','personal-egress-description');
+      const checkLabel=el('label','personal-check-wrap'),check=el('input','personal-egress-check');
+      check.type='checkbox';check.value=item.id;check.checked=checked;check.disabled=!canEdit();check.setAttribute('aria-label','选择个人出口 '+item.name);
+      check.addEventListener('change',()=>{if(check.checked)selectedPersonal.add(item.id);else selectedPersonal.delete(item.id);renderPersonalOutbounds();});
+      checkLabel.append(check);
+      info.append(el('strong','',item.name),el('span','personal-egress-badge',item.enabled?'个人专用':'已停用'),el('p','',[personalProtocolLabel(item),formatEndpoint(item.server,item.server_port),item.tls_mode==='tls'&&item.sni&&item.sni!==item.server?'SNI '+item.sni:''].filter(Boolean).join(' · ')));
+      lead.append(checkLabel,info);
       const actions=el('div','personal-egress-actions');
       actions.append(button('编辑','',()=>openPersonal(item),!canEdit()));
       const out=(state.outbounds||[]).find(out=>out.id===item.id);
@@ -362,11 +394,13 @@ window.panelPageScripts.register(document.currentScript.src, () => {
       },!canEdit()||!item.enabled);actions.append(test);
       actions.append(button(item.enabled?'停用':'启用','',()=>changePersonal(item,'toggle'),!canEdit()));
       const remove=button('删除','personal-egress-delete',()=>changePersonal(item,'delete'),!canEdit());remove.setAttribute('aria-label','删除个人出口 '+item.name);actions.append(remove);
-      row.append(info,actions);container.append(row);
+      row.append(lead,actions);container.append(row);
     }
+    if(focusedCheck)container.querySelector('.personal-egress-check[value="'+CSS.escape(focusedCheck)+'"]:not(:disabled)')?.focus({preventScroll:true});
   }
   function openPersonal(item=null){
     if(!canEdit())return;
+    personalPrevious=document.activeElement;
     personalEditing=item;personalForm.reset();personalDirty=false;
     const defaults={name:'',type:'socks',server:'',server_port:1080,username:'',method:'chacha20-ietf-poly1305',sni:''};
     for(const [name,value] of Object.entries({...defaults,...item})){
@@ -385,7 +419,9 @@ window.panelPageScripts.register(document.currentScript.src, () => {
     if(!personalDialog.open)return true;
     if(actionPending&&!force)return false;
     if(personalDirty&&!force&&!(await window.panelConfirm('放弃未保存的个人出口更改？','放弃更改')))return false;
-    personalDialog.close();personalMethodPicker?.destroy();personalDirty=false;personalField('password').value='';return true;
+    personalDialog.close();personalMethodPicker?.destroy();personalDirty=false;personalField('password').value='';
+    if(!force&&personalPrevious?.isConnected&&personalPrevious!==document.body)personalPrevious.focus({preventScroll:true});
+    return true;
   }
   async function changePersonal(item,action){
     if(!canEdit())return;
@@ -395,9 +431,266 @@ window.panelPageScripts.register(document.currentScript.src, () => {
     catch(error){if(!disposed)window.panelToast(error.message,true);}
     finally{actionPending=false;if(!disposed)render();}
   }
+  function canCommitImport(){
+    const currentCount=(state.personal_outbounds||[]).length;
+    return !!(canEdit()&&!importBusy&&importPreview&&importPreview.can_import&&importText.value===importValidatedText&&importPreview.existing_count===currentCount);
+  }
+  function updateImportSubmitState(listChanged=false){
+    const submit=$('personal-import-submit'),previewBtn=$('personal-import-preview-btn');
+    const stale=!!importPreview&&(importText.value!==importValidatedText||listChanged||importPreview.existing_count!==(state.personal_outbounds||[]).length);
+    previewBtn.disabled=!canEdit()||importBusy||!importText.value.trim();
+    submit.disabled=!canCommitImport();
+    submit.textContent=canCommitImport()?'确认导入（'+importPreview.importable_count+'）':'确认导入';
+    if(importPreview)renderImportPreview(importPreview,stale);
+  }
+  function renderImportPreview(data,stale=false){
+    const box=$('personal-import-preview');box.replaceChildren();box.hidden=false;
+    const stats=el('div','personal-preview-stats');
+    const addStat=(label,value,detail,danger=false)=>{
+      const card=el('div','personal-preview-stat'+(danger?' is-error':''));
+      card.append(el('span','',label),el('strong','',String(value)),el('small','',detail));
+      stats.append(card);
+    };
+    addStat('解析成功',data.parsed_count,data.duplicate_count?'待导入 '+data.importable_count+' 项':'全部可导入');
+    addStat('跳过重复',data.duplicate_count,'不覆盖已有出口');
+    addStat('错误行',data.error_count,data.source==='json'?'JSON 条目校验':'逐行链接校验',data.error_count>0);
+    addStat('剩余额度',data.remaining_quota+' / '+data.limit,data.exceeds_quota?'超出可用上限':'导入后余 '+data.after_remaining_quota,data.exceeds_quota);
+    box.append(stats);
+    const noteText=stale?'导入内容或已有出口已变化，请重新点击「预览解析」后再确认导入。':
+      data.error_count>0?'存在 '+data.error_count+' 处错误；整批原子导入不会部分写入，请修正或移除对应行后重新预览。':
+      data.exceeds_quota?'本次新增 '+data.importable_count+' 个，超过剩余额度 '+data.remaining_quota+' 个（上限 '+data.limit+' 个），请删减后再试。':
+      data.importable_count===0?'全部 '+data.duplicate_count+' 项均与现有个人出口完全重复，无需重复导入。':
+      '校验通过：将一次性导入 '+data.importable_count+' 个个人出口'+(data.duplicate_count?'，自动跳过 '+data.duplicate_count+' 个完全重复项。':'。');
+    const note=el('p','personal-preview-note'+((stale||data.error_count>0||data.exceeds_quota)?' is-warning':''),noteText);
+    box.append(note);
+    if(data.errors?.length){
+      const errWrap=el('div','personal-preview-errors');
+      errWrap.append(el('strong','personal-preview-subheading','错误行明细'));
+      const unit=data.source==='json'?'项':'行';
+      for(const err of data.errors){
+        const row=el('div','personal-preview-error-row');
+        row.append(el('span','personal-preview-line','第 '+err.line+' '+unit),el('span','',err.message));
+        errWrap.append(row);
+      }
+      box.append(errWrap);
+    }
+    if(data.items?.length){
+      const listWrap=el('div','personal-preview-items');
+      listWrap.append(el('strong','personal-preview-subheading','解析明细'));
+      for(const item of data.items){
+        const row=el('div','personal-preview-item'+(item.status==='duplicate'?' is-duplicate':''));
+        const meta=el('div','personal-preview-item-info');
+        meta.append(el('strong','',item.name),el('small','',[personalProtocolLabel(item),formatEndpoint(item.server,item.server_port),item.sni&&item.sni!==item.server?'SNI '+item.sni:'',item.resolved_ip&&item.resolved_ip!==item.server?'解析 IP '+item.resolved_ip:'',!item.enabled?'导入为停用':''].filter(Boolean).join(' · ')));
+        const badge=el('span','personal-preview-badge',item.status==='duplicate'?'重复跳过':'待导入');
+        row.append(meta,badge);listWrap.append(row);
+      }
+      box.append(listWrap);
+    }
+  }
+  function openImport(){
+    if(!canEdit())return;
+    importPrevious=document.activeElement;
+    importFileSequence++;
+    importText.value='';importFile.value='';importPreview=null;importValidatedText='';importDirty=false;
+    $('personal-import-filename').textContent='支持 .json 或 .txt 文本';
+    $('personal-import-clear').hidden=true;
+    const limit=state.personal_outbound_limit||10,count=(state.personal_outbounds||[]).length;
+    $('personal-import-quota').textContent='剩余额度 '+Math.max(0,limit-count)+' / '+limit;
+    $('personal-import-preview').hidden=true;$('personal-import-preview').replaceChildren();
+    $('personal-import-error').hidden=true;
+    updateImportSubmitState();
+    importDialog.showModal();importText.focus();
+  }
+  async function closeImport(force=false){
+    if(!importDialog.open)return true;
+    if((actionPending||importBusy)&&!force)return false;
+    if(importDirty&&!force&&!(await window.panelConfirm('放弃尚未导入的节点内容？','放弃导入')))return false;
+    importDialog.close();
+    importFileSequence++;
+    importText.value='';importFile.value='';importPreview=null;importValidatedText='';importDirty=false;
+    $('personal-import-preview').replaceChildren();$('personal-import-preview').hidden=true;$('personal-import-error').hidden=true;
+    if(!force&&importPrevious?.isConnected&&importPrevious!==document.body)importPrevious.focus({preventScroll:true});
+    return true;
+  }
+  async function runImportPreview(){
+    if(!canEdit()||importBusy)return;
+    const raw=importText.value;
+    const err=$('personal-import-error'),box=$('personal-import-preview');
+    err.hidden=true;
+    if(!raw.trim()){err.textContent='请先粘贴节点链接或选择导出文件';err.hidden=false;importText.focus();return;}
+    importBusy=true;updateImportSubmitState();
+    $('personal-import-preview-btn').textContent='解析中…';
+    box.hidden=false;box.replaceChildren(el('p','routing-catalog-loading','正在解析配置并校验公网地址…'));
+    try{
+      const result=await api('/personal/import/preview',{text:raw});
+      if(disposed||!importDialog.open)return;
+      importPreview=result;importValidatedText=raw;
+      renderImportPreview(result,importText.value!==raw);
+    }catch(error){
+      if(!disposed&&importDialog.open){importPreview=null;importValidatedText='';box.hidden=true;box.replaceChildren();err.textContent=error.message;err.hidden=false;err.setAttribute('tabindex','-1');err.focus();}
+    }finally{
+      importBusy=false;
+      if(!disposed&&importDialog.open){
+        $('personal-import-preview-btn').textContent='预览解析';
+        updateImportSubmitState();
+        if(canCommitImport())$('personal-import-submit').focus({preventScroll:true});
+      }
+    }
+  }
+  function refreshExportControls(){
+    const total=(state.personal_outbounds||[]).length,checked=selectedPersonal.size;
+    root.querySelectorAll('[data-export-scope]').forEach(node=>{
+      const kind=node.dataset.exportScope;
+      node.textContent=kind==='selected'?'已勾选出口（'+checked+'）':'全部个人出口（'+total+'）';
+      node.disabled=exportBusy||(kind==='selected'?!checked:!total);
+      node.setAttribute('aria-pressed',String(exportScope===kind));
+    });
+    root.querySelectorAll('[data-export-format]').forEach(node=>{
+      node.disabled=exportBusy;
+      node.setAttribute('aria-pressed',String(exportFormat===node.dataset.exportFormat));
+    });
+    $('personal-export-scope-hint').textContent=exportScope==='selected'?'仅导出当前勾选的 '+checked+' 个个人出口。':'导出你名下全部 '+total+' 个个人出口；不含内部 ID、分流规则或公共出口。';
+    $('personal-export-format-hint').textContent=exportFormat==='json'?'生成本面板版本化 JSON（v1），完整保留名称、启停状态、HTTPS/SNI 与认证信息，可直接批量回导。':'生成每行一条 HTTP(S) / SOCKS5 / SS 链接文本，便于跨工具迁移或再次导入。';
+    $('personal-export-submit').disabled=!canEdit()||exportBusy||(exportScope==='selected'?!checked:!total);
+  }
+  function openExport(){
+    const items=state.personal_outbounds||[];
+    if(!canEdit()||!items.length)return;
+    exportPrevious=document.activeElement;
+    exportScope=selectedPersonal.size>0?'selected':'all';
+    exportFormat='json';
+    $('personal-export-error').hidden=true;
+    refreshExportControls();
+    exportDialog.showModal();
+    $('personal-export-submit').focus();
+  }
+  function closeExport(force=false){
+    if(!exportDialog.open)return true;
+    if(exportBusy&&!force)return false;
+    exportDialog.close();$('personal-export-error').hidden=true;
+    if(!force&&exportPrevious?.isConnected&&exportPrevious!==document.body)exportPrevious.focus({preventScroll:true});
+    return true;
+  }
+  listen($('personal-select-all'),'change',event=>{
+    const items=state.personal_outbounds||[];
+    if(event.target.checked)for(const item of items)selectedPersonal.add(item.id);
+    else selectedPersonal.clear();
+    renderPersonalOutbounds();
+  });
+  listen($('personal-selection-clear'),'click',()=>{selectedPersonal.clear();renderPersonalOutbounds();$('personal-select-all').focus({preventScroll:true});});
   listen($('personal-egress-add'),'click',()=>openPersonal());
+  listen($('personal-egress-import'),'click',()=>openImport());
+  listen($('personal-egress-export'),'click',()=>openExport());
   for(const id of ['personal-egress-close','personal-egress-cancel'])listen($(id),'click',()=>closePersonal());
   listen(personalDialog,'cancel',event=>{event.preventDefault();closePersonal();});
+  listen(personalDialog,'click',event=>{if(event.target===personalDialog){const rect=personalDialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right)closePersonal();}});
+  for(const id of ['personal-import-close','personal-import-cancel'])listen($(id),'click',()=>closeImport());
+  listen(importDialog,'cancel',event=>{event.preventDefault();closeImport();});
+  listen(importDialog,'click',event=>{if(event.target===importDialog){const rect=importDialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right)closeImport();}});
+  listen($('personal-import-pick'),'click',()=>importFile.click());
+  listen($('personal-import-clear'),'click',()=>{
+    importFileSequence++;
+    importText.value='';importFile.value='';importPreview=null;importValidatedText='';importDirty=false;
+    $('personal-import-filename').textContent='支持 .json 或 .txt 文本';
+    $('personal-import-clear').hidden=true;
+    $('personal-import-preview').replaceChildren();$('personal-import-preview').hidden=true;
+    $('personal-import-error').hidden=true;
+    updateImportSubmitState();importText.focus();
+  });
+  listen(importText,'input',()=>{
+    importFileSequence++;
+    importDirty=!!importText.value.trim();
+    $('personal-import-clear').hidden=!importText.value.length;
+    $('personal-import-error').hidden=true;
+    updateImportSubmitState();
+  });
+  listen(importFile,'change',async()=>{
+    const file=importFile.files?.[0];if(!file)return;
+    const sequence=++importFileSequence;
+    const err=$('personal-import-error');err.hidden=true;
+    if(file.size>256*1024){importFile.value='';err.textContent='文件大小超过 256 KB 上限，请选择正确的导出文件';err.hidden=false;return;}
+    try{
+      const content=await file.text();
+      if(disposed||!importDialog.open||sequence!==importFileSequence)return;
+      importText.value=content;importDirty=!!content.trim();
+      $('personal-import-filename').textContent=file.name;
+      $('personal-import-clear').hidden=!content.length;
+      importFile.value='';
+      updateImportSubmitState();
+      if(content.trim())await runImportPreview();
+    }catch(_){if(!disposed&&importDialog.open&&sequence===importFileSequence){importFile.value='';err.textContent='无法读取所选文件，请检查编码后重试';err.hidden=false;}}
+  });
+  listen($('personal-import-preview-btn'),'click',()=>runImportPreview());
+  listen(importForm,'submit',async event=>{
+    event.preventDefault();
+    if(!canCommitImport())return;
+    const raw=importText.value,err=$('personal-import-error'),submit=$('personal-import-submit');
+    err.hidden=true;submit.disabled=true;submit.textContent='正在导入…';
+    try{
+      await flushDraft();
+      actionPending=true;render();
+      const next=await api('/personal/import',{text:raw});
+      const summary=next.import_result||{};
+      await closeImport(true);
+      acceptState(next);
+      window.panelToast('已导入 '+(summary.imported_count??0)+' 个个人出口'+(summary.duplicate_count?' · 跳过重复 '+summary.duplicate_count+' 项':''));
+    }catch(error){
+      if(!disposed&&importDialog.open){err.textContent=error.message;err.hidden=false;err.setAttribute('tabindex','-1');err.focus();}
+    }finally{
+      actionPending=false;
+      if(!disposed){render();if(importDialog.open)updateImportSubmitState();}
+    }
+  });
+  for(const id of ['personal-export-close','personal-export-cancel'])listen($(id),'click',()=>closeExport());
+  listen(exportDialog,'cancel',event=>{event.preventDefault();closeExport();});
+  listen(exportDialog,'click',event=>{if(event.target===exportDialog){const rect=exportDialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right)closeExport();}});
+  root.querySelectorAll('[data-export-scope]').forEach(node=>listen(node,'click',()=>{
+    if(node.disabled||exportScope===node.dataset.exportScope)return;
+    exportScope=node.dataset.exportScope;$('personal-export-error').hidden=true;refreshExportControls();
+  }));
+  root.querySelectorAll('[data-export-format]').forEach(node=>listen(node,'click',()=>{
+    if(node.disabled||exportFormat===node.dataset.exportFormat)return;
+    exportFormat=node.dataset.exportFormat;$('personal-export-error').hidden=true;refreshExportControls();
+  }));
+  listen(exportForm,'submit',async event=>{
+    event.preventDefault();if(!canEdit()||exportBusy)return;
+    const ids=exportScope==='selected'?[...selectedPersonal]:undefined;
+    const count=exportScope==='selected'?selectedPersonal.size:(state.personal_outbounds||[]).length;
+    if(!count)return;
+    const err=$('personal-export-error'),submit=$('personal-export-submit');
+    err.hidden=true;exportBusy=true;refreshExportControls();renderPersonalOutbounds();submit.textContent='正在生成…';
+    try{
+      const payload={csrf:state.csrf,scope:exportScope,format:exportFormat};
+      if(ids)payload.ids=ids;
+      const response=await fetch(base+'/personal/export',{method:'POST',credentials:'same-origin',cache:'no-store',signal:scope,headers:{'Content-Type':'application/json','Accept':'application/json, text/plain'},body:JSON.stringify(payload)});
+      if(window.customerAuthRedirect?.(response))throw new DOMException('登录状态已失效','AbortError');
+      if(!response.ok){
+        let message='导出未完成，请稍后重试';
+        try{const data=await response.json();if(typeof data.detail==='string')message=data.detail;}catch(_){}
+        if(response.status===403&&!disposed){
+          try{const fresh=await fetch(base+'/api',{credentials:'same-origin',cache:'no-store',signal:scope,headers:{'Accept':'application/json'}});if(fresh.ok){const next=await fresh.json();if(!next.policy.allowed){closeExport(true);selectedPersonal.clear();}acceptState(next,!!next.policy.allowed&&generation!==savedGeneration);}}catch(_){}
+        }
+        throw new Error(message);
+      }
+      const blob=await response.blob();
+      if(disposed||!canEdit()||!exportDialog.open)throw new DOMException('导出已取消','AbortError');
+      const disposition=response.headers.get('Content-Disposition')||'';
+      const match=disposition.match(/filename="([a-z0-9._-]+)"/i);
+      const filename=match?match[1]:('personal-outbounds.'+(exportFormat==='json'?'json':'txt'));
+      const url=URL.createObjectURL(blob);
+      const link=document.createElement('a');
+      link.href=url;link.download=filename;link.rel='noopener';link.hidden=true;
+      document.body.append(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+      exportBusy=false;closeExport();
+      window.panelToast('已导出 '+count+' 个个人出口，请妥善保管含密码文件');
+    }catch(error){
+      if(!disposed&&error.name!=='AbortError'&&exportDialog.open){err.textContent=error.message;err.hidden=false;err.setAttribute('tabindex','-1');err.focus();}
+    }finally{
+      exportBusy=false;
+      if(!disposed){submit.textContent='下载导出文件';if(exportDialog.open)refreshExportControls();renderPersonalOutbounds();}
+    }
+  });
   listen(personalForm,'input',()=>{personalDirty=true;});
   listen(personalForm,'change',()=>{personalDirty=true;refreshPersonalFields();});
   root.querySelectorAll('[data-personal-kind]').forEach(node=>listen(node,'click',()=>{personalField('type').value=node.dataset.personalKind;personalDirty=true;refreshPersonalFields();}));
@@ -764,18 +1057,21 @@ window.panelPageScripts.register(document.currentScript.src, () => {
   listen(document, 'click', event => { if (!event.target.closest('.routing-rule-menu,.routing-more-button')) closeMenus(); });
   listen(document, 'keydown', event => { if (event.key === 'Escape') closeMenus(true); });
   const canLeave = async () => {
-    if (!(await closeEditor()) || !(await closePersonal())) return false;
+    if (!(await closeEditor()) || !(await closePersonal()) || !(await closeImport()) || !closeExport()) return false;
     try { await flushDraft(); return true; }
     catch (_) { return window.panelConfirm('草稿尚未保存，离开后将丢失本地更改。', '离开页面'); }
   };
   window.customerCanLeave = canLeave;
-  listen(window, 'beforeunload', event => { if (editorChanged || personalDirty || generation !== savedGeneration) { event.preventDefault(); event.returnValue = ''; } });
+  listen(window, 'beforeunload', event => { if (editorChanged || personalDirty || importDirty || generation !== savedGeneration) { event.preventDefault(); event.returnValue = ''; } });
   scope.addEventListener('abort', () => {
     disposed = true; clearTimeout(saveTimer); clearTimeout(pollTimer); valuePicker?.destroy(); targetPicker?.destroy(); previewPicker?.destroy();
     if (window.customerCanLeave === canLeave) delete window.customerCanLeave;
     document.body.classList.remove('routing-has-savebar');
     if (editor.open) editor.close();
     if(personalDialog.open)personalDialog.close();personalMethodPicker?.destroy();
+    if(importDialog.open){importText.value='';importDialog.close();}
+    if(exportDialog.open)exportDialog.close();
+    selectedPersonal.clear();
   }, {once: true});
   listen(document, 'visibilitychange', () => schedulePoll(!document.hidden));
   render(); schedulePoll();

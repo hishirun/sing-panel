@@ -84,7 +84,8 @@ app.add_middleware(EntryPaths, db=DB)
 @app.middleware('http')
 async def headers(request, call_next):
     response = await call_next(request)
-    response.headers['Cache-Control'] = 'no-store'
+    if 'no-store' not in response.headers.get('Cache-Control', ''):
+        response.headers['Cache-Control'] = 'no-store'
     if request.url.path.startswith('/static/') and request.method in ('GET','HEAD'):
         # Static files are public and must not refresh or cache an admin session.
         if 'set-cookie' in response.headers:del response.headers['set-cookie']

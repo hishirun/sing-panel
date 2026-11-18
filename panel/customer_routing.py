@@ -4,6 +4,7 @@ import threading
 import time
 
 from fastapi import HTTPException, Request
+from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from .core import connect, reason
@@ -60,6 +61,8 @@ def install(app, m):
     rate_lock = threading.Lock()
     preview_gate = threading.BoundedSemaphore(2)
     preview_users = set()
+    import_preview_gate = threading.BoundedSemaphore(2)
+    import_preview_users = set()
 
     def limited(key, count, window):
         now = time.monotonic()
@@ -223,6 +226,78 @@ def install(app, m):
     @app.post('/s/{token}/routing/personal')
     async def personal_create(request:Request,token:str):
         return await personal_change(request,token,None,'save')
+
+    @app.post('/s/{token}/routing/personal/import/preview')
+    async def personal_import_preview(request:Request,token:str):
+        raw=await body(request)
+        user,_,_=identity(request,token,True,True)
+        limited(('personal-preview',user['id']),20,60)
+        with rate_lock:
+            if user['id'] in import_preview_users or not import_preview_gate.acquire(blocking=False):
+                raise HTTPException(429,'正在解析导入内容，请稍后再试')
+            import_preview_users.add(user['id'])
+        from .personal_outbounds import preview_import
+        try:
+            def calculate():
+                result=preview_import(m,user['id'],raw.get('text',''))
+                with m.runtime.lock:
+                    identity(request,token,True,True)
+                    m.csrf(request,str(raw.get('csrf','')))
+                return result
+            return await run_in_threadpool(calculate)
+        except ValueError as error:
+            raise HTTPException(422,str(error))
+        finally:
+            with rate_lock:
+                import_preview_users.discard(user['id'])
+                import_preview_gate.release()
+
+    @app.post('/s/{token}/routing/personal/import')
+    async def personal_import_commit(request:Request,token:str):
+        raw=await body(request)
+        user,policy,_=identity(request,token,True,True)
+        busy(policy);limited(('personal',user['id']),10,60)
+        from .personal_outbounds import import_batch
+        def authorize():
+            _,current,_=identity(request,token,True,True)
+            m.csrf(request,str(raw.get('csrf','')));busy(current)
+        try:
+            result=await run_in_threadpool(import_batch,m,user['id'],raw.get('text',''),authorize)
+        except ValueError as error:
+            raise HTTPException(422,str(error))
+        return {**state(request,token),'import_result':result}
+
+    @app.post('/s/{token}/routing/personal/export')
+    async def personal_export(request:Request,token:str):
+        raw=await body(request)
+        user,_,_=identity(request,token,True,True)
+        limited(('personal-export',user['id']),20,60)
+        scope=raw.get('scope','selected' if 'ids' in raw else 'all')
+        if scope not in ('all','selected'):
+            raise HTTPException(422,'导出范围无效')
+        if scope=='selected' and not isinstance(raw.get('ids'),list):
+            raise HTTPException(422,'请选择要导出的个人出口')
+        if scope=='all' and raw.get('ids') is not None:
+            raise HTTPException(422,'导出范围与选择不一致')
+        ids=raw.get('ids') if scope=='selected' else None
+        from .personal_outbounds import export_personal
+        try:
+            def download():
+                # Serialize the sensitive read with password/permission revocation.
+                with m.runtime.lock:
+                    identity(request,token,True,True)
+                    m.csrf(request,str(raw.get('csrf','')))
+                    return export_personal(m.DB,user['id'],ids,raw.get('format','json'))
+            content,filename,media_type=await run_in_threadpool(download)
+        except LookupError as error:
+            raise HTTPException(404,str(error))
+        except ValueError as error:
+            raise HTTPException(422,str(error))
+        return Response(content,media_type=media_type,headers={
+            'Cache-Control':'private, no-store',
+            'Pragma':'no-cache',
+            'Content-Disposition':f'attachment; filename="{filename}"',
+        })
 
     @app.post('/s/{token}/routing/personal/{outbound_id}')
     async def personal_save(request:Request,token:str,outbound_id:str):
