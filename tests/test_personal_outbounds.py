@@ -1,5 +1,5 @@
 """Personal egress ownership, secret handling, pinning and rollback boundaries."""
-import copy,json,re,socket
+import copy,json,re,socket,threading
 from unittest.mock import Mock
 import pytest
 from panel import personal_outbounds as p,routing,user_routing as ur
@@ -432,8 +432,18 @@ def test_mixed_error_batch_atomic_rollback_and_concurrent_modifications(customer
     assert mc.status_code==422 and 'SECRET_BAD' not in mc.text and p.rows(m.DB)==baseline and apply_calls==[]
     # 2. Verify runtime.lock is NOT held during DNS resolution or check_document
     lock_states=[]
-    monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**k:(lock_states.append(m.runtime.lock.locked()),[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',0))])[1])
-    monkeypatch.setattr(m,'check_document',lambda doc:lock_states.append(m.runtime.lock.locked()))
+    def record_lock_state():
+        # Probe from another thread: RLock.locked() only exists in Python 3.14,
+        # and acquiring from the owner thread would hide accidental recursion.
+        def probe():
+            acquired=m.runtime.lock.acquire(blocking=False)
+            lock_states.append(not acquired)
+            if acquired:m.runtime.lock.release()
+        worker=threading.Thread(target=probe)
+        worker.start();worker.join(timeout=2)
+        assert not worker.is_alive()
+    monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**k:(record_lock_state(),[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',0))])[1])
+    monkeypatch.setattr(m,'check_document',lambda doc:record_lock_state())
     clean_batch='socks5://u:p@valid.example.com:1081#One\nsocks5://u:p@valid.example.com:1082#Two'
     # 3. Runtime apply failure rolls back ALL inserted rows in the batch and restores runtime
     monkeypatch.setattr(m.runtime,'apply',Mock(side_effect=[RuntimeError('CORE-INTERNAL-SECRET'),None]))
